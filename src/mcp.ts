@@ -179,7 +179,7 @@ export async function runMcp(opts: McpOptions): Promise<void> {
           return respond({
             protocolVersion: "2024-11-05",
             capabilities: { tools: {}, resources: {} },
-            serverInfo: { name: "diagram-tool", version: "0.1.0" },
+            serverInfo: { name: "diagram-tool", version: "0.2.0" },
             instructions: SERVER_INSTRUCTIONS,
           });
         case "ping":
