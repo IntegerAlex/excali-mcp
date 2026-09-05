@@ -115,27 +115,15 @@ export interface CatalogEntry {
   file: string;
   sampleItems: string[];
   bundled: boolean;
+  /** per-index names from upstream libraries.json (v2 libs); preferred over element text */
+  itemNames?: string[];
 }
 
 const UPSTREAM_BASE =
   "https://raw.githubusercontent.com/excalidraw/excalidraw-libraries/main/libraries";
 
-export const CATALOG: CatalogEntry[] = [
-  { slug: "aws-serverless", name: "AWS Serverless Icons", description: "Lambda, API Gateway, DynamoDB, S3, SQS, SNS and more.", keywords: "aws lambda serverless cloud s3 dynamodb api gateway", source: "slobodan/aws-serverless.excalidrawlib", file: "aws-serverless.excalidrawlib", sampleItems: ["Lambda", "S3", "DynamoDB", "API Gateway", "SQS"], bundled: false },
-  { slug: "aws-architecture", name: "AWS Architecture Icons", description: "EC2, ELB, Lambda and core AWS building blocks.", keywords: "aws ec2 elb architecture cloud", source: "narhari-motivaras/aws-architecture-icons.excalidrawlib", file: "aws-architecture-icons.excalidrawlib", sampleItems: ["EC2", "ELB", "Lambda"], bundled: false },
-  { slug: "gcp-icons", name: "GCP Icons", description: "Google Cloud Platform product icons.", keywords: "gcp google cloud", source: "clementbosc/gcp-icons.excalidrawlib", file: "gcp-icons.excalidrawlib", sampleItems: ["Compute", "Storage", "BigQuery"], bundled: false },
-  { slug: "azure-cloud", name: "Azure cloud services icons", description: "Key Vault, App Service, SQL Database, VMs and more.", keywords: "azure microsoft cloud vm sql", source: "youritjang/azure-cloud-services.excalidrawlib", file: "azure-cloud-services.excalidrawlib", sampleItems: ["Key Vault", "App Service", "Virtual Machine", "SQL Database"], bundled: false },
-  { slug: "technology-logos", name: "Technology Logos", description: "Kubernetes, Docker, Terraform, Kafka, Redis and cloud-native logos.", keywords: "kubernetes docker k8s terraform kafka redis devops logo", source: "maeddes/technology-logos.excalidrawlib", file: "technology-logos.excalidrawlib", sampleItems: ["Kubernetes", "Docker", "Terraform", "Kafka"], bundled: false },
-  { slug: "software-architecture", name: "Software Architecture", description: "Microservice, database, cache, event bus, browser, mobile.", keywords: "software architecture microservice database cache", source: "youritjang/software-architecture.excalidrawlib", file: "software-architecture.excalidrawlib", sampleItems: ["microservice", "database", "cache"], bundled: false },
-  { slug: "network-topology", name: "Network topology icons", description: "Router, switch, firewall, server, VPN, client.", keywords: "network router switch firewall server vpn topology", source: "dwelle/network-topology-icons.excalidrawlib", file: "network-topology-icons.excalidrawlib", sampleItems: ["Router", "Switch", "Firewall", "Server", "VPN"], bundled: true },
-  { slug: "dev-ops", name: "Dev Ops Icons", description: "Nomad, Consul, Vault, Ansible, Docker, Kubernetes, Terraform and more.", keywords: "devops ansible vault consul nomad github docker kubernetes terraform", source: "markopolo123/dev_ops.excalidrawlib", file: "dev_ops.excalidrawlib", sampleItems: ["Docker", "Kubernetes", "Terraform", "Ansible"], bundled: true },
-  { slug: "it-logos", name: "IT Logos", description: "React, Python, Docker, Kubernetes, Kafka and web stack logos.", keywords: "react python docker kubernetes logo frontend backend", source: "pclainchard/it-logos.excalidrawlib", file: "it-logos.excalidrawlib", sampleItems: ["React", "Python", "Docker", "Kubernetes"], bundled: false },
-  { slug: "system-design", name: "System Design Components", description: "Generic high-level system design blocks.", keywords: "system design interview cloud stream server db", source: "rohanp/system-design.excalidrawlib", file: "system-design.excalidrawlib", sampleItems: ["Cloud", "Servers", "DB"], bundled: false },
-  { slug: "systemdesignicons", name: "System Design Icons", description: "Service clusters, cache layers, MapReduce blocks.", keywords: "system design cache cluster mapreduce", source: "niknm/systemdesignicons.excalidrawlib", file: "systemdesignicons.excalidrawlib", sampleItems: ["ServiceCluster", "cacheLayer"], bundled: true },
-  { slug: "uml-er", name: "Shapes for UML & ER Diagrams", description: "Opinionated UML and ER shapes.", keywords: "uml er diagram class entity", source: "BjoernKW/UML-ER-library.excalidrawlib", file: "UML-ER-library.excalidrawlib", sampleItems: ["class", "entity"], bundled: true },
-  { slug: "awesome-icons", name: "Awesome Icons", description: "Everyday glyphs: user, lock, search, chart, email, calendar.", keywords: "icon user lock search chart email calendar home ui", source: "ferminrp/awesome-icons.excalidrawlib", file: "awesome-icons.excalidrawlib", sampleItems: ["User", "Lock", "Search", "Chart", "email"], bundled: true },
-  { slug: "system-icons", name: "System Icons", description: "Document, cloud, star, file and generic system glyphs.", keywords: "icon document cloud file star system", source: "xxxdeveloper/system-icons.excalidrawlib", file: "system-icons.excalidrawlib", sampleItems: ["document", "cloud", "star"], bundled: true },
-];
+export { CATALOG } from "./catalog.generated.js";
+import { CATALOG } from "./catalog.generated.js";
 
 const LOGIC_ONLY = /\b(sequence|er\b|class diagram|state diagram|flowchart of logic|algorithm)\b/i;
 
@@ -145,6 +133,7 @@ export interface LibraryHit {
   description: string;
   itemCount: number | null;
   sampleItems: string[];
+  bundled: boolean;
 }
 
 /** Keyword-ranked catalog search. Logic-only queries return [] + no-libs hint. */
@@ -163,6 +152,8 @@ export function listLibraries(query = ""): { hits: LibraryHit[]; noLibsHint?: st
       if (e.name.toLowerCase().includes(t)) score += 2;
       if (e.description.toLowerCase().includes(t)) score += 1;
     }
+    // Prefer libs with real per-item names — but only among actual matches.
+    if (terms.length && score > 0 && e.itemNames?.length) score += 1;
     return { e, score };
   })
     .filter((s) => s.score > 0)
@@ -171,7 +162,11 @@ export function listLibraries(query = ""): { hits: LibraryHit[]; noLibsHint?: st
   return {
     hits: scored.map((s) => ({
       slug: s.e.slug, name: s.e.name, description: s.e.description,
-      itemCount: s.e.sampleItems.length || null, sampleItems: s.e.sampleItems.slice(0, 5),
+      // Counts only from upstream itemNames (true counts). Otherwise null =
+      // unknown until list_library_items fetches it — never a sample length.
+      itemCount: s.e.itemNames?.length ?? null,
+      sampleItems: (s.e.sampleItems.length ? s.e.sampleItems : (s.e.itemNames ?? [])).slice(0, 5),
+      bundled: s.e.bundled,
     })),
   };
 }
@@ -227,12 +222,21 @@ async function readPayloadFile(path: string): Promise<Record<string, unknown>[][
   return normalizePayload(raw, path);
 }
 
+/** Pre-generated-catalog slugs, kept resolving so saved decorations don't break. */
+const SLUG_ALIASES: Record<string, string> = {
+  "network-topology": "network-topology-icons",
+  "azure-cloud": "azure-cloud-services",
+  "aws-architecture": "aws-architecture-icons",
+  "uml-er": "uml-er-library",
+};
+
 /** Resolve a library slug to item groups: cwd/libraries → cache → bundled → upstream fetch. */
-export async function loadLibraryBySlug(slug: string, libraryUrl?: string): Promise<{ entry: CatalogEntry | null; groups: Record<string, unknown>[][]; names: string[] }> {
+export async function loadLibraryBySlug(rawSlug: string, libraryUrl?: string): Promise<{ entry: CatalogEntry | null; groups: Record<string, unknown>[][]; names: string[] }> {
+  const slug = SLUG_ALIASES[rawSlug] ?? rawSlug;
   const entry = CATALOG.find((e) => e.slug === slug) ?? null;
   const cacheKey = libraryUrl ?? slug;
   const cached = payloadCache.get(cacheKey);
-  if (cached) return { entry, groups: cached, names: namesOf(cached) };
+  if (cached) return { entry, groups: cached, names: namesOf(cached, entry?.itemNames) };
 
   const candidates: string[] = [];
   if (entry) {
@@ -245,7 +249,7 @@ export async function loadLibraryBySlug(slug: string, libraryUrl?: string): Prom
       try {
         const groups = await readPayloadFile(p);
         payloadCache.set(cacheKey, groups);
-        return { entry, groups, names: namesOf(groups) };
+        return { entry, groups, names: namesOf(groups, entry?.itemNames) };
       } catch { /* try next */ }
     }
   }
@@ -269,10 +273,11 @@ export async function loadLibraryBySlug(slug: string, libraryUrl?: string): Prom
       await writeFile(join(cacheDir(), entry.file), JSON.stringify(raw));
     }
   } catch { /* cache write optional */ }
-  return { entry, groups, names: namesOf(groups) };
+  return { entry, groups, names: namesOf(groups, entry?.itemNames) };
 }
 
-function namesOf(groups: Record<string, unknown>[][]): string[] {
+function namesOf(groups: Record<string, unknown>[][], itemNames?: string[]): string[] {
+  if (itemNames && itemNames.length === groups.length) return [...itemNames];
   return groups.map((els, i) => {
     const t = els.find((e) => e.type === "text" && typeof e.text === "string");
     const name = t ? String(t.text).slice(0, 40) : "";

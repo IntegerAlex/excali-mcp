@@ -43,7 +43,7 @@ Agent loop without MCP: edit `mermaidSource` in the context file, run `diagram-t
 
 ## Libraries (excalidraw-libs)
 
-`libraries/*.excalidrawlib` (v1 + v2) are served at `GET /api/libraries` for hand drag-drop, and composited server-side via `decorations` for agent renders. 6 payloads ship offline (network-topology, dev-ops, systemdesignicons, UML-ER, awesome-icons, system-icons); the full ~100-library catalog is searchable via `list_libraries` and fetched on demand into `~/.cache/diagram-tool/libraries/`.
+`libraries/*.excalidrawlib` (v1 + v2) are served at `GET /api/libraries` for hand drag-drop, and composited server-side via `decorations` for agent renders. 6 payloads ship offline (network-topology, dev-ops, systemdesignicons, UML-ER, awesome-icons, system-icons); the full 232-library catalog is searchable via `list_libraries` (generated metadata with real item counts, refreshable via `node scripts/build-catalog.mjs`) and fetched on demand into `~/.cache/diagram-tool/libraries/`.
 
 - `diagram-tool library list` — downloaded files + item count
 - `diagram-tool library add <name>` — download from libraries.excalidraw.com (e.g. `diagram-tool library add aws`)
