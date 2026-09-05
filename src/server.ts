@@ -156,12 +156,16 @@ function buildApp(contextPath: string): Hono {
   });
 
   // Pre-bundled viewer + fonts (dist/public, absolute path so CWD doesn't matter).
+  // Canvas fonts live nested at /fonts/<Family>/<file>.woff2 (see
+  // src/viewer/build.mjs) — allow that subtree, nothing else nested.
   app.use("/*", async (c, next) => {
     const p = c.req.path;
     if (p.startsWith("/api/") || p === "/" || p === "/scene.excalidraw.json" || p === "/scene.mmd") {
       return next();
     }
-    if (!/^\/[A-Za-z0-9._-]+$/.test(p)) return c.text("not found", 404);
+    const flat = /^\/[A-Za-z0-9._-]+$/.test(p);
+    const font = /^\/fonts\/[A-Za-z0-9._/-]+$/.test(p) && !p.includes("..");
+    if (!flat && !font) return c.text("not found", 404);
     try {
       const body = await readFile(join(PUBLIC, p.slice(1)));
       const type = STATIC_TYPES[extname(p)] ?? "application/octet-stream";
