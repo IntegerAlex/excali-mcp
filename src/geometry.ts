@@ -413,8 +413,21 @@ export function slideEdgeLabelsOutOfNodes(elements: Record<string, unknown>[]): 
       const bh = num(b.height);
       return x >= bx - MARGIN && x <= bx + bw + MARGIN && y >= by - MARGIN && y <= by + bh + MARGIN;
     });
-  const marchOut = (t: Record<string, unknown>): void => {
-    let cx = num(t.x) + num(t.width) / 2;
+  // Node captions carry containerId pointing at their own rectangle (or sit
+  // in an icon-* group). They are anchored by design — marchOut must only
+  // ever touch arrow-bound edge labels. Hoisted here so both marchOut loops
+  // below can use it.
+  const isCaption = (e: Record<string, unknown>): boolean => {
+    if (e.type !== "text") return false;
+    const cid = e.containerId;
+    if (typeof cid === "string") {
+      const c = elements.find((x) => x.id === cid);
+      if (c && (c.type === "rectangle" || c.type === "diamond" || c.type === "ellipse")) return true;
+    }
+    const g = e.groupIds as string[] | undefined;
+    return Array.isArray(g) && g.some((x) => typeof x === "string" && x.startsWith("icon-"));
+  };
+  const marchOut = (t: Record<string, unknown>): void => {    let cx = num(t.x) + num(t.width) / 2;
     let cy = num(t.y) + num(t.height) / 2;
     if (!inside(cx, cy)) return;
     const arrow = elements.find((e) => e.type === "arrow" && e.id === (t as { containerId?: string }).containerId);
@@ -446,6 +459,7 @@ export function slideEdgeLabelsOutOfNodes(elements: Record<string, unknown>[]): 
   };
   for (const t of elements) {
     if (t.type !== "text" || typeof t.containerId !== "string") continue;
+    if (isCaption(t)) continue;
     if ([t.x, t.y, t.width, t.height].some((v) => typeof v !== "number" || !isFinite(v as number))) continue;
     marchOut(t);
   }
@@ -453,16 +467,6 @@ export function slideEdgeLabelsOutOfNodes(elements: Record<string, unknown>[]): 
   // line (least-overlap axis fails for same-line pairs: it slides them along
   // the shared edge instead of apart). Node captions are anchored — when a
   // caption collides with a free label, only the label moves.
-  const isCaption = (e: Record<string, unknown>): boolean => {
-    if (e.type !== "text") return false;
-    const cid = e.containerId;
-    if (typeof cid === "string") {
-      const c = elements.find((x) => x.id === cid);
-      if (c && (c.type === "rectangle" || c.type === "diamond" || c.type === "ellipse")) return true;
-    }
-    const g = e.groupIds as string[] | undefined;
-    return Array.isArray(g) && g.some((x) => typeof x === "string" && x.startsWith("icon-"));
-  };
   const labels = elements.filter(
     (e) =>
       e.type === "text" &&
@@ -527,11 +531,44 @@ export function slideEdgeLabelsOutOfNodes(elements: Record<string, unknown>[]): 
   // collisions is separation, not box-escape.
   for (const t of elements) {
     if (t.type !== "text") continue;
+    if (isCaption(t)) continue;
     if ([t.x, t.y, t.width, t.height].some((v) => typeof v !== "number" || !isFinite(v as number))) continue;
     marchOut(t);
   }
   separatePairs();
+  // Endpoints moved (declutter/reanchor) but dagre-era midpoints never did —
+  // collapsing them kills the stale S-curves. Runs here so every caller
+  // (diagram.ts, applyDecorations, MCP path) gets it; endpoints untouched so
+  // label positions from the passes above stay valid.
+  straightenArrows(elements);
   return elements;
+}
+
+/**
+ * Collapse stale intermediate arrow waypoints onto the straight segment
+ * between the (already re-anchored) endpoints. declutter/moveArrowEnds only
+ * ever move pts[0]/pts[last]; dagre-era middles survive and render as loops
+ * once nodes have shifted. Endpoints untouched; degenerate input skipped.
+ */
+export function straightenArrows(elements: Record<string, unknown>[]): void {
+  const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : NaN);
+  for (const e of elements) {
+    if (e.type !== "arrow") continue;
+    const pts = e.points as [number, number][] | undefined;
+    if (!pts || pts.length < 3) continue;
+    const first = pts[0]!;
+    const last = pts[pts.length - 1]!;
+    const fx = num(first[0]);
+    const fy = num(first[1]);
+    const lx = num(last[0]);
+    const ly = num(last[1]);
+    if (!isFinite(fx) || !isFinite(fy) || !isFinite(lx) || !isFinite(ly)) continue;
+    const n = pts.length;
+    for (let i = 1; i < n - 1; i++) {
+      const t = i / (n - 1);
+      pts[i] = [fx + (lx - fx) * t, fy + (ly - fy) * t];
+    }
+  }
 }
 
 /**

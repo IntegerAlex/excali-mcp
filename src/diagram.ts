@@ -4,7 +4,7 @@ import { parseMermaidToExcalidraw } from "@excalidraw/mermaid-to-excalidraw";
 import { complete, type ChatMsg, type LlmOpts } from "./llm.js";
 import { loadIconTemplates } from "./library.js";
 import { declutter, dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, withBoundLabels } from "./geometry.js";
-export { declutter, dedupeArrows, reanchor, slideEdgeLabelsOutOfNodes, withBoundLabels } from "./geometry.js";
+export { declutter, dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, straightenArrows, withBoundLabels } from "./geometry.js";
 import { existsSync } from "node:fs";
 
 export interface Scene {

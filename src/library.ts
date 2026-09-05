@@ -442,8 +442,16 @@ export async function applyDecorations(
           `Decoration "${itemName || d.library}#${d.itemIndex}" targets unknown node "${d.node}". Available nodes: ${nodeNames(elements).join(", ") || "(none)"}.`,
         );
       }
+    } else if (d.x !== undefined || d.y !== undefined) {
+      // Explicit coordinates: tiling where told is intentional, no match needed.
+      nodeId = null;
     } else {
       nodeId = matchNodeByName(elements, itemName);
+      if (!nodeId) {
+        throw new Error(
+          `Decoration "${itemName || d.library}#${d.itemIndex}" matched no node (auto-match by item name failed). Pass explicit "node" (id or label). Available nodes: ${nodeNames(elements).join(", ") || "(none)"}.`,
+        );
+      }
     }
     if (nodeId && d.x === undefined && d.y === undefined && replaceNodeWithIcon(elements, nodeId, template)) {
       placed.push({ library: d.library, itemIndex: d.itemIndex, elementIds: [nodeId], node: nodeId });
