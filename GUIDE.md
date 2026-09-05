@@ -42,10 +42,11 @@ sequenceDiagram
     deactivate S
 ```
 
-## Libraries: when icons vs no icons
-- Cloud/architecture/system-design -> `list_libraries` (aws/gcp/azure/kubernetes), pick <=6 icons, pass as `decorations`. Icons decorate labeled boxes; never drop labels.
-- Network topologies -> `network-topology-icons`.
-- Flowcharts of logic, sequence/ER/class/state diagrams -> NO libraries.
+## Libraries: mandatory trigger, then choose
+- TRIGGER (must use icons): request mentions AWS, GCP, Azure, Kubernetes, Docker, cloud, network, infrastructure, or icons/logos — or names services like Lambda, S3, EC2. Then: `list_libraries` -> `list_library_items` -> pass picks as `decorations` (max ~6). Skipping icons on these diagrams is wrong.
+- Cloud/architecture/system-design -> vendor libs (aws/gcp/azure/kubernetes); network topologies -> `network-topology-icons`.
+- Icons decorate labeled boxes; never drop labels.
+- NO libraries for: logic flowcharts, sequence/ER/class/state diagrams (pure mermaid reads better).
 - Node icon classes (`class USER actor,icon_user`) also work with the 10 bundled slugs: icon_user, icon_users, icon_home, icon_lock, icon_search, icon_chart, icon_email, icon_calendar, icon_location, icon_payment.
 
 ## Troubleshooting

@@ -5,6 +5,7 @@
 export const SERVER_INSTRUCTIONS = `Diagram Tool turns Mermaid into an Excalidraw scene with a live localhost UI.
 Use it when the user asks to draw, visualize, diagram, or whiteboard anything.
 Workflow: 1) get_diagram for current state (edits need it), 2) author the FULL mermaid source yourself, 3) render_diagram to validate+render — share the returned url. Open the url once; it live-updates on every render.
+LIBRARY RULE (mandatory): if the request mentions AWS, GCP, Azure, Kubernetes, Docker, cloud, network, or icons/logos — or names services like Lambda, S3, EC2 — you MUST call list_libraries, then list_library_items, then pass the picks as render_diagram decorations. Never render a cloud/architecture diagram with plain boxes when icons exist.
 Structural changes = new mermaid + render. Never hand-edit scene.elements.
 Supported types: flowchart, sequenceDiagram, erDiagram, classDiagram, stateDiagram-v2.`;
 
@@ -32,7 +33,7 @@ flowchart LR
     class CTXFILE store
 \`\`\`
 
-LIBRARIES: cloud/architecture/system-design -> consider list_libraries (AWS/GCP/Azure/K8s icons via decorations, max ~6, decorate not replace). Logic flowcharts, sequence/ER/class diagrams -> NO libs, pure mermaid.
+LIBRARIES (mandatory when triggered): if the request mentions AWS, GCP, Azure, Kubernetes, Docker, cloud, network, infrastructure, or icons/logos — or names services (Lambda, S3, EC2, …) — you MUST call list_libraries + list_library_items BEFORE rendering, and pass the picks as decorations (max ~6, decorate labeled boxes, never drop labels). Skipping this on a cloud/architecture diagram is wrong. Logic flowcharts, sequence/ER/class diagrams -> NO libs, pure mermaid.
 On parse error the server returns the error verbatim: fix ONLY the syntax and retry with the full source.`;
 
 export const GET_DESCRIPTION = `Read the current diagram state {rev, prompt, mermaidSource}. Call first for edits/follow-ups so you preserve node IDs. Returns empty mermaidSource when nothing exists yet — then just render fresh.`;
@@ -85,10 +86,11 @@ sequenceDiagram
     deactivate S
 \`\`\`
 
-## Libraries: when icons vs no icons
-- Cloud/architecture/system-design -> \`list_libraries\` (aws/gcp/azure/kubernetes), pick <=6 icons, pass as \`decorations\`. Icons decorate labeled boxes; never drop labels.
-- Network topologies -> \`network-topology-icons\`.
-- Flowcharts of logic, sequence/ER/class/state diagrams -> NO libraries.
+## Libraries: mandatory trigger, then choose
+- TRIGGER (must use icons): request mentions AWS, GCP, Azure, Kubernetes, Docker, cloud, network, infrastructure, or icons/logos — or names services like Lambda, S3, EC2. Then: \`list_libraries\` -> \`list_library_items\` -> pass picks as \`decorations\` (max ~6). Skipping icons on these diagrams is wrong.
+- Cloud/architecture/system-design -> vendor libs (aws/gcp/azure/kubernetes); network topologies -> \`network-topology-icons\`.
+- Icons decorate labeled boxes; never drop labels.
+- NO libraries for: logic flowcharts, sequence/ER/class/state diagrams (pure mermaid reads better).
 - Node icon classes (\`class USER actor,icon_user\`) also work with the 10 bundled slugs: icon_user, icon_users, icon_home, icon_lock, icon_search, icon_chart, icon_email, icon_calendar, icon_location, icon_payment.
 
 ## Troubleshooting
