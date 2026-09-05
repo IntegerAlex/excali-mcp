@@ -64,7 +64,7 @@ function union(a: Box | null, b: Box): Box {
 
 function textBox(el: Element): Box {
   const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-  const width = Math.max(30, text.length * 11);
+  const width = Math.max(30, text.length * 12); // ~0.6em Virgil advance; overestimate beats collapse
   const height = 28;
   const anchor = (el.getAttribute?.("text-anchor") ?? "").trim();
   const ax = numAttr(el, "x", 0);
@@ -182,7 +182,7 @@ function localBox(el: Element): Box | null {
       if (!rendered.length) {
         // Unknown leaf (foreignObject etc.): legacy text-length guess.
         const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-        return { x: 0, y: 0, width: Math.max(30, text.length * 11), height: 28 };
+        return { x: 0, y: 0, width: Math.max(30, text.length * 12), height: 28 };
       }
       let acc: Box | null = null;
       for (const kid of rendered) {
@@ -221,7 +221,7 @@ try {
   const textProto = scope.SVGTextContentElement?.prototype;
   if (textProto && typeof textProto.getComputedTextLength !== "function") {
     textProto.getComputedTextLength = function (this: { textContent?: string | null }) {
-      return Math.max(30, (this.textContent ?? "").length * 11);
+      return Math.max(30, (this.textContent ?? "").length * 12);
     };
   }
 } catch {

@@ -3,6 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { declutter, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes } from "./geometry.js";
 
 export interface LibraryItem {
   id: string;
@@ -299,9 +300,109 @@ export interface Decoration {
   library: string;
   itemIndex: number;
   libraryUrl?: string;
+  /** Target diagram node id or label, e.g. "SQS". The agent knows the mapping — prefer this over auto-match. */
+  node?: string;
   scale?: number;
   x?: number;
   y?: number;
+}
+
+/** Normalize for name matching: case/punctuation-insensitive. */
+export function normalizeName(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** Node label text via `label` prop or bound text element. */
+function nodeLabel(elements: Record<string, unknown>[], id: string): string {
+  const node = elements.find((e) => String(e.id) === id);
+  const label = node?.label as { text?: string } | undefined;
+  if (label && typeof label.text === "string" && label.text) return label.text;
+  const bound = elements.find((e) => e.type === "text" && e.containerId === id);
+  if (bound && typeof bound.text === "string") return bound.text;
+  return "";
+}
+
+/** Find a container node for a decoration. Exact label/id match first, then
+ *  substring fallback ("s3" matches "S3 bucket"). First match wins. */
+export function matchNodeByName(elements: Record<string, unknown>[], name: string): string | null {
+  const want = normalizeName(name);
+  if (!want) return null;
+  const containers = elements.filter(
+    (e) => e.type === "rectangle" || e.type === "diamond" || e.type === "ellipse",
+  );
+  for (const e of containers) {
+    if (normalizeName(nodeLabel(elements, String(e.id))) === want) return String(e.id);
+  }
+  for (const e of containers) {
+    if (normalizeName(String(e.id)) === want) return String(e.id);
+  }
+  if (want.length < 2) return null;
+  for (const e of containers) {
+    const label = normalizeName(nodeLabel(elements, String(e.id)));
+    if (label.includes(want) || want.includes(label)) return String(e.id);
+  }
+  return null;
+}
+
+/** Node labels available for explicit `node` targeting (for error messages). */
+export function nodeNames(elements: Record<string, unknown>[]): string[] {
+  const out: string[] = [];
+  for (const e of elements) {
+    if (e.type !== "rectangle" && e.type !== "diamond" && e.type !== "ellipse") continue;
+    const label = nodeLabel(elements, String(e.id));
+    out.push(label ? `${String(e.id)} ("${label}")` : String(e.id));
+  }
+  return out;
+}
+
+const numf = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
+
+/**
+ * Icon-AS-node: delete the converter box, put library art in its place with
+ * the mermaid caption stacked below, re-anchor arrows onto the final border.
+ * Unknown/degenerate input degrades to `false` (caller falls back) — never throws.
+ */
+export function replaceNodeWithIcon(
+  elements: Record<string, unknown>[],
+  nodeId: string,
+  template: Record<string, unknown>[],
+): boolean {
+  const idx = elements.findIndex(
+    (e) => String(e.id) === nodeId && (e.type === "rectangle" || e.type === "diamond" || e.type === "ellipse"),
+  );
+  if (idx === -1) return false;
+  const node = elements[idx]!;
+  const captions = elements.filter((e) => e.type === "text" && e.containerId === nodeId);
+  const capW = Math.max(0, ...captions.map((c) => numf(c.width, 40)), 40) + 34;
+  const oldBox = {
+    x: numf(node.x),
+    y: numf(node.y),
+    w: Math.max(1, numf(node.width, 80)),
+    h: Math.max(1, numf(node.height, 40)),
+  };
+  const newW = Math.max(oldBox.w, 132, capW);
+  const newH = Math.max(oldBox.h, 108);
+  const box = { x: oldBox.x - (newW - oldBox.w) / 2, y: oldBox.y - (newH - oldBox.h) / 2, w: newW, h: newH };
+  const groupId = `icon-${nodeId}`;
+  const art = instantiateIcon(template, box, groupId);
+  if (art.length === 0) return false;
+  // Commit: remove box, place art, stack captions in the bottom strip.
+  elements.splice(idx, 1);
+  elements.push(...art);
+  let cy = box.y + box.h - 6;
+  const stacked = [...captions].reverse();
+  for (const c of stacked) {
+    const fs = numf(c.fontSize, 16);
+    const ch = numf(c.height, fs * 1.3);
+    cy -= ch + 4;
+    c.y = cy;
+    c.x = box.x + box.w / 2 - numf(c.width, 40) / 2;
+    delete c.containerId;
+    const g = c.groupIds as string[] | undefined;
+    c.groupIds = [...(g ?? []), groupId];
+  }
+  reanchor(elements, nodeId, box);
+  return true;
 }
 
 /**
@@ -311,19 +412,43 @@ export interface Decoration {
 export async function applyDecorations(
   elements: Record<string, unknown>[],
   decorations: Decoration[],
-): Promise<{ added: number; placed: { library: string; itemIndex: number; elementIds: string[] }[] }> {
+): Promise<{ added: number; placed: { library: string; itemIndex: number; elementIds: string[]; node?: string }[] }> {
   if (decorations.length > 6) throw new Error("Max 6 decorations per render (keeps diagrams readable).");
   const num = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
   const xs = elements.flatMap((e) => (typeof e.x === "number" && typeof e.width === "number" ? [e.x as number, (e.x as number) + (e.width as number)] : []));
   const ys = elements.flatMap((e) => (typeof e.y === "number" && typeof e.height === "number" ? [e.y as number, (e.y as number) + (e.height as number)] : []));
   let cursorX = xs.length ? Math.min(...xs) : 0;
   const baseY = ys.length ? Math.max(...ys) + 60 : 0;
-  const placed: { library: string; itemIndex: number; elementIds: string[] }[] = [];
+  const placed: { library: string; itemIndex: number; elementIds: string[]; node?: string }[] = [];
   let added = 0;
   for (const d of decorations) {
-    const { groups } = await loadLibraryBySlug(d.library, d.libraryUrl);
+    const { groups, names } = await loadLibraryBySlug(d.library, d.libraryUrl);
     const template = groups[d.itemIndex];
     if (!template) throw new Error(`Item ${d.itemIndex} out of range for "${d.library}" (0–${groups.length - 1}). Use list_library_items to repick.`);
+    // Icon-as-node: the agent knows the mapping, so an explicit `node`
+    // (id or label) wins. Otherwise auto-match by item name, else tile below.
+    // A failed explicit target is an error (with valid names) — silent tiling
+    // is what produced the disconnected-icon screenshots.
+    const itemName = names[d.itemIndex] ?? "";
+    let nodeId: string | null = null;
+    if (typeof d.node === "string" && d.node) {
+      const direct = elements.find((e) => String(e.id) === d.node);
+      nodeId =
+        direct && (direct.type === "rectangle" || direct.type === "diamond" || direct.type === "ellipse")
+          ? String(direct.id)
+          : matchNodeByName(elements, d.node);
+      if (!nodeId) {
+        throw new Error(
+          `Decoration "${itemName || d.library}#${d.itemIndex}" targets unknown node "${d.node}". Available nodes: ${nodeNames(elements).join(", ") || "(none)"}.`,
+        );
+      }
+    } else {
+      nodeId = matchNodeByName(elements, itemName);
+    }
+    if (nodeId && d.x === undefined && d.y === undefined && replaceNodeWithIcon(elements, nodeId, template)) {
+      placed.push({ library: d.library, itemIndex: d.itemIndex, elementIds: [nodeId], node: nodeId });
+      continue;
+    }
     const scale = d.scale ?? 1;
     // bbox of template
     const tx = template.flatMap((e) => (typeof e.x === "number" && typeof e.width === "number" ? [e.x as number, (e.x as number) + (e.width as number)] : []));
@@ -365,6 +490,13 @@ export async function applyDecorations(
     if (d.x === undefined) cursorX += w + 40;
     placed.push({ library: d.library, itemIndex: d.itemIndex, elementIds: ids });
   }
+  // Replacements change footprints: re-run layout + label passes.
+  declutter(elements);
+  slideEdgeLabelsOutOfNodes(elements);
+  // Detach last — labels must stay bound during declutter/slide so they
+  // move with their arrows. Excalidraw re-snaps bound text to midpoint
+  // at render time, undoing any manual positioning.
+  detachArrowLabels(elements);
   return { added, placed };
 }
 

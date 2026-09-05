@@ -13,11 +13,11 @@ export const RENDER_DESCRIPTION = `Validate + render Mermaid into the shared Exc
 
 TYPE CHOICE: processes/decisions/architecture -> flowchart (LR wide, TD tall); interactions over time -> sequenceDiagram; data models -> erDiagram; OOP -> classDiagram; states -> stateDiagram-v2.
 
-FLOWCHART RULES: init line first: %%{init: {"flowchart": {"nodeSpacing": 60, "rankSpacing": 90, "curve": "linear"}}}%%. SELF-EXPLANATORY node ids (CLI, CTXFILE — never A/B/C). Declare ALL nodes first, then edges grouped with %% comments + blank lines (NO subgraphs — the renderer cannot draw them). Edge labels pipe-only: -->|reads|. Shape by role: rhombus {..} for decisions, [...] for everything else. End with palette + class on EVERY node: classDef actor fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px / store fill:#fff3e0,stroke:#fb8c00 / flow fill:#e8f5e9,stroke:#43a047 / ext fill:#f3e5f5,stroke:#8e24aa. Max ~12 nodes. Hub with many edges -> TD. Max 3 edges per node; one edge per node pair (merge labels with " · ").
+FLOWCHART RULES: init line first: %%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140, "curve": "linear"}}}%%. SELF-EXPLANATORY node ids (CLI, CTXFILE — never A/B/C). Declare ALL nodes first, then edges grouped with %% comments + blank lines (NO subgraphs — the renderer cannot draw them). Edge labels pipe-only: -->|reads|. Shape by role: rhombus {..} for decisions, [...] for everything else. End with palette + class on EVERY node: classDef actor fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px / store fill:#fff3e0,stroke:#fb8c00 / flow fill:#e8f5e9,stroke:#43a047 / ext fill:#f3e5f5,stroke:#8e24aa. Max ~12 nodes. Hub with many edges -> TD. Max 3 edges per node; one edge per node pair (merge labels with " · ").
 
 Example:
 \`\`\`mermaid
-%%{init: {"flowchart": {"nodeSpacing": 60, "rankSpacing": 90, "curve": "linear"}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140, "curve": "linear"}}}%%
 flowchart LR
     USER["User"]
     CLI["diagram-tool CLI"]
@@ -33,7 +33,7 @@ flowchart LR
     class CTXFILE store
 \`\`\`
 
-LIBRARIES (mandatory when triggered): if the request mentions AWS, GCP, Azure, Kubernetes, Docker, cloud, network, infrastructure, or icons/logos — or names services (Lambda, S3, EC2, …) — you MUST call list_libraries + list_library_items BEFORE rendering, and pass the picks as decorations (max ~6, decorate labeled boxes, never drop labels). Skipping this on a cloud/architecture diagram is wrong. Logic flowcharts, sequence/ER/class diagrams -> NO libs, pure mermaid.
+LIBRARIES (mandatory when triggered): if the request mentions AWS, GCP, Azure, Kubernetes, Docker, cloud, network, infrastructure, or icons/logos — or names services (Lambda, S3, EC2, …) — you MUST call list_libraries + list_library_items BEFORE rendering, and pass the picks as decorations (max ~6) WITH \`node\` set to the target diagram node id/label for each icon (you know which icon goes where — e.g. SQS icon -> node "SQS"). The icon then becomes that node. Omitting \`node\` risks a disconnected icon row. Logic flowcharts, sequence/ER/class diagrams -> NO libs, pure mermaid.
 On parse error the server returns the error verbatim: fix ONLY the syntax and retry with the full source.`;
 
 export const GET_DESCRIPTION = `Read the current diagram state {rev, prompt, mermaidSource}. Call first for edits/follow-ups so you preserve node IDs. Returns empty mermaidSource when nothing exists yet — then just render fresh.`;
@@ -57,7 +57,7 @@ export const GUIDE = `# Diagram Tool agent guide
 
 ## Few-shot: flowchart LR
 \`\`\`mermaid
-%%{init: {"flowchart": {"nodeSpacing": 60, "rankSpacing": 90, "curve": "linear"}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140, "curve": "linear"}}}%%
 flowchart LR
     USER["User"]
     CLI["diagram-tool CLI"]

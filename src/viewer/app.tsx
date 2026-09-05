@@ -35,12 +35,15 @@ function canon(v: unknown): string {
 
 import { mergeElements } from "../merge.js";
 
-/** Frame all elements (verified working; retry once late for font settling). */
+/** Frame all elements. Same deterministic math as initial mount (fitViewport),
+ *  applied post-mount for remote updates — no animation races. */
 function fitView(a: ExcalidrawImperativeAPI): void {
   try {
-    a.scrollToContent();
+    const els = a.getSceneElements() as unknown as { x: number; y: number; width: number; height: number }[];
+    const vp = fitViewport(els, window.innerWidth, window.innerHeight - 40);
+    a.updateScene({ appState: vp as never });
   } catch {
-    /* ignore */
+    /* canvas not ready yet */
   }
 }
 
@@ -67,10 +70,12 @@ export function fitViewport(
   const maxX = Math.max(...finite.map((e) => e.x + e.width)) + pad;
   const maxY = Math.max(...finite.map((e) => e.y + e.height)) + pad;
   const zoom = Math.min(2, Math.min(vw / (maxX - minX), (vh - topPad) / (maxY - minY)));
+  const z = isFinite(zoom) && zoom > 0 ? zoom : 1;
+  // Excalidraw convention (verified vs transform source): screen = (scene + scroll) * zoom.
   return {
-    scrollX: (-(minX + maxX) / 2) * zoom + vw / 2,
-    scrollY: -minY * zoom + topPad,
-    zoom: { value: isFinite(zoom) && zoom > 0 ? zoom : 1 },
+    scrollX: vw / 2 / z - (minX + maxX) / 2,
+    scrollY: topPad / z - minY,
+    zoom: { value: z },
   };
 }
 

@@ -1,6 +1,10 @@
 /** diagram-tool mcp — hand-rolled MCP JSON-RPC over stdio. No deps, stderr-only logs. */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadContext, saveContext } from "./context.js";
-import { convertToScene, validateMermaid } from "./diagram.js";
+import { convertToScene, lintEdgeLabels, validateMermaid } from "./diagram.js";
+import { detachArrowLabels } from "./geometry.js";
 import { applyDecorations, listLibraries, loadLibraryBySlug, type Decoration } from "./library.js";
 import { startServer, type StartedServer } from "./server.js";
 import {
@@ -15,6 +19,21 @@ interface RpcMsg {
   params?: Record<string, unknown>;
 }
 
+/** Package version for diagnostics (which code served this render?). Sync + cached. */
+let versionCache: string | null = null;
+export function getVersion(): string {
+  if (versionCache) return versionCache;
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"),
+    ) as { version?: string };
+    versionCache = pkg.version ?? "dev";
+  } catch {
+    versionCache = "dev";
+  }
+  return versionCache;
+}
+
 const TOOLS = [
   {
     name: "render_diagram",
@@ -26,12 +45,14 @@ const TOOLS = [
         prompt: { type: "string", description: "Short label of what changed (stored in context)." },
         decorations: {
           type: "array",
-          description: "Optional library icons (max 6). Discover via list_libraries + list_library_items.",
+          description:
+            "Optional library icons (max 6). Discover via list_libraries + list_library_items. IMPORTANT: set `node` to the target diagram node id or label for each icon (you know the mapping, e.g. SQS icon -> node 'SQS Queue') — the icon then BECOMES that node. Omit `node` only to auto-match by name; unmatched icons tile below the diagram.",
           items: {
             type: "object",
             properties: {
               library: { type: "string", description: "Library slug, e.g. aws-serverless." },
               itemIndex: { type: "integer", description: "Item index from list_library_items." },
+              node: { type: "string", description: "Target diagram node id or label. REQUIRED for a clean result — without it the icon may land in a disconnected row." },
               libraryUrl: { type: "string", description: "Custom .excalidrawlib URL (rarely needed)." },
               scale: { type: "number", description: "Scale multiplier, default 1." },
               x: { type: "number", description: "Explicit x (default: auto-tiled row)." },
@@ -104,6 +125,15 @@ export async function runMcp(opts: McpOptions): Promise<void> {
         } catch (e) {
           return { text: JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), isError: true };
         }
+        const long = lintEdgeLabels(source.trim());
+        if (long.length > 0) {
+          return {
+            text: JSON.stringify({
+              error: `Edge labels too long — they blob on canvas. Rewrite each to ≤4 words and move detail into node labels: ${long.map((l) => `"${l.label}" (${l.words} words)`).join("; ")}. Then retry with the full source.`,
+            }),
+            isError: true,
+          };
+        }
         let scene;
         try {
           scene = await convertToScene(source.trim());
@@ -119,6 +149,9 @@ export async function runMcp(opts: McpOptions): Promise<void> {
           } catch (e) {
             return { text: JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), isError: true };
           }
+        } else {
+          // No decorations: detach arrow labels here (applyDecorations does it when present).
+          detachArrowLabels(scene.elements as Record<string, unknown>[]);
         }
         const next = await saveContext(opts.context, {
           ...(typeof args.prompt === "string" ? { prompt: args.prompt } : {}),
@@ -130,6 +163,7 @@ export async function runMcp(opts: McpOptions): Promise<void> {
         return {
           text: JSON.stringify({
             rev: next.rev, elements: (scene.elements as unknown[]).length, url,
+            server: `diagram-tool@${getVersion()}`,
             excalidrawJson: `${base}.excalidraw.json`, mmd: `${base}.mmd`,
             ...(placed !== undefined ? { placed } : {}),
           }),
@@ -179,7 +213,7 @@ export async function runMcp(opts: McpOptions): Promise<void> {
           return respond({
             protocolVersion: "2024-11-05",
             capabilities: { tools: {}, resources: {} },
-            serverInfo: { name: "diagram-tool", version: "0.2.0" },
+            serverInfo: { name: "diagram-tool", version: getVersion() },
             instructions: SERVER_INSTRUCTIONS,
           });
         case "ping":
