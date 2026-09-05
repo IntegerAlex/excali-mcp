@@ -204,7 +204,6 @@ export interface FanIn {
   node: string;
   degree: number;
 }
-
 /** Total-degree hot spots over unique node pairs (the topology dedupeArrows
  *  leaves behind). Non-blocking warning — hubs are sometimes legitimate —
  *  but past this point layout reliably degrades, so the agent should split
@@ -231,6 +230,89 @@ export function lintFanIn(source: string, cap = 5): FanIn[] {
     .filter(([, n]) => n > cap)
     .map(([node, n]) => ({ node, degree: n }))
     .sort((x, y) => y.degree - x.degree);
+}
+
+/**
+ * Node-box collisions in the final scene (dagre sometimes places two boxes
+ * overlapping — e.g. a wide label's span swallows a neighbor's slot — and
+ * post-pass separation was deleted with declutter, so this is reported, not
+ * repaired). 4px inset: merely touching edges don't count. Cap 5 pairs.
+ */
+export function lintOverlaps(elements: Record<string, unknown>[]): [string, string][] {
+  const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : NaN);
+  const finiteBox = (e: Record<string, unknown>): { x: number; y: number; w: number; h: number } | null => {
+    const x = num(e.x);
+    const y = num(e.y);
+    const w = num(e.width);
+    const h = num(e.height);
+    return isFinite(x) && isFinite(y) && isFinite(w) && isFinite(h) && w > 0 && h > 0
+      ? { x: x + 4, y: y + 4, w: w - 8, h: h - 8 }
+      : null;
+  };
+  const captionOf = (groupId: string): string => {
+    const cap = elements.find(
+      (x) => x.type === "text" && ((x.groupIds as string[] | undefined) ?? []).includes(groupId),
+    );
+    const t = cap && typeof cap.text === "string" ? cap.text.split("\n")[0] ?? "" : "";
+    return t.slice(0, 40);
+  };
+  const boxes: { name: string; x: number; y: number; w: number; h: number }[] = [];
+  // Icon groups count as ONE footprint (union bbox): template-internal rects
+  // overlap each other by design and must never report as collisions.
+  const seen = new Set<string>();
+  for (const e of elements) {
+    const g = (e.groupIds as string[] | undefined) ?? [];
+    const icon = g.find((x) => typeof x === "string" && x.startsWith("icon-"));
+    if (!icon || seen.has(icon)) continue;
+    seen.add(icon);
+    const members = elements.filter((x) => ((x.groupIds as string[] | undefined) ?? []).includes(icon));
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const m of members) {
+      const b = finiteBox(m);
+      if (b) {
+        xs.push(b.x, b.x + b.w);
+        ys.push(b.y, b.y + b.h);
+      }
+    }
+    if (xs.length === 0) continue;
+    const node = icon.slice(5);
+    const cap = captionOf(icon);
+    boxes.push({
+      name: cap ? `${node} ("${cap}")` : node,
+      x: Math.min(...xs),
+      y: Math.min(...ys),
+      w: Math.max(...xs) - Math.min(...xs),
+      h: Math.max(...ys) - Math.min(...ys),
+    });
+  }
+  // Plain node boxes (never icon-group members).
+  for (const e of elements) {
+    if (e.type !== "rectangle" && e.type !== "diamond" && e.type !== "ellipse") continue;
+    const g = (e.groupIds as string[] | undefined) ?? [];
+    if (g.some((x) => typeof x === "string" && x.startsWith("icon-"))) continue;
+    const b = finiteBox(e);
+    if (!b || b.w <= 0 || b.h <= 0) continue;
+    const id = String(e.id);
+    const bound = elements.find((x) => x.type === "text" && x.containerId === id);
+    const t =
+      bound && typeof bound.text === "string"
+        ? (bound.text.split("\n")[0] ?? "").slice(0, 40)
+        : "";
+    boxes.push({ name: t ? `${id} ("${t}")` : id, ...b });
+  }
+  const out: [string, string][] = [];
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i]!;
+      const b = boxes[j]!;
+      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) {
+        out.push([a.name, b.name]);
+        if (out.length >= 5) return out;
+      }
+    }
+  }
+  return out;
 }
 
 let iconCache: Promise<Map<string, Record<string, unknown>[]>> | null = null;

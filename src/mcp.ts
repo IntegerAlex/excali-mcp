@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadContext, saveContext } from "./context.js";
-import { convertToScene, lintEdgeLabels, lintFanIn, validateMermaid } from "./diagram.js";
+import { convertToScene, lintEdgeLabels, lintFanIn, lintOverlaps, validateMermaid } from "./diagram.js";
 import { detachArrowLabels } from "./geometry.js";
 import { applyDecorations, listLibraries, loadLibraryBySlug, type Decoration } from "./library.js";
 import { startServer, type StartedServer } from "./server.js";
@@ -162,19 +162,25 @@ export async function runMcp(opts: McpOptions): Promise<void> {
         const url = await ensureUrl();
         const base = opts.context.replace(/\.context\.json$/, "").replace(/\.json$/, "");
         const fanIn = lintFanIn(source.trim());
+        const overlaps = lintOverlaps(scene.elements as Record<string, unknown>[]);
+        const warnings: string[] = [];
+        if (fanIn.length > 0) {
+          warnings.push(
+            `Fan-in hot spots (>5 edges on one node — layout degrades past this; split via hub/intermediate nodes toward ≤3/node): ${fanIn.map((f) => `${f.node} (${f.degree})`).join(", ")}.`,
+          );
+        }
+        if (overlaps.length > 0) {
+          warnings.push(
+            `Node boxes overlap on canvas (dagre collided them — the renderer never moves boxes; shorten the colliding labels / split ranks / cut nodes): ${overlaps.map(([a, b]) => `${a} × ${b}`).join(", ")}.`,
+          );
+        }
         return {
           text: JSON.stringify({
             rev: next.rev, elements: (scene.elements as unknown[]).length, url,
             server: `diagram-tool@${getVersion()}`,
             excalidrawJson: `${base}.excalidraw.json`, mmd: `${base}.mmd`,
             ...(placed !== undefined ? { placed } : {}),
-            ...(fanIn.length > 0
-              ? {
-                  warnings: [
-                    `Fan-in hot spots (>5 edges on one node — layout degrades past this; split via hub/intermediate nodes toward ≤3/node): ${fanIn.map((f) => `${f.node} (${f.degree})`).join(", ")}.`,
-                  ],
-                }
-              : {}),
+            ...(warnings.length > 0 ? { warnings } : {}),
           }),
         };
       }

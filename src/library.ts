@@ -539,6 +539,14 @@ export function replaceNodeWithIcon(
       c.groupIds = [...(g ?? []), groupId];
     }
   }
+  // Paint order = array order, and art was just pushed last: move captions
+  // to the end so text always paints above icon strokes. The SDK does the
+  // same (labels appended last); replacement must not invert it.
+  for (const c of captions) {
+    const i = elements.indexOf(c);
+    if (i !== -1) elements.splice(i, 1);
+    elements.push(c);
+  }
   reanchor(elements, nodeId, box);
   return { replaced: true, grew };
 }

@@ -98,6 +98,8 @@ sequenceDiagram
 |---|---|
 | Mermaid parse error (returned verbatim) | Fix syntax only, resend full source |
 | Converter: no drawable elements / subgraph | Flatten subgraphs into plain nodes + edges |
+| Node boxes overlap (named in warnings) | Shorten the colliding labels / split ranks — dagre collided them, the renderer never moves boxes |
+| \`<-->\` renders one direction | The converter keeps one half — write two directed edges if you need both |
 | 409 rev conflict (UI edited meanwhile) | \`get_diagram\`, rebase, render again |
 | Port 3000 taken | Server falls back to a free port; use returned \`url\` |
 | Viewer bundle missing | Run the package build once (\`node src/viewer/build.mjs\`) |
