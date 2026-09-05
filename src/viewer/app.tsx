@@ -33,6 +33,8 @@ function canon(v: unknown): string {
   return JSON.stringify(v) ?? "";
 }
 
+import { mergeElements } from "../merge.js";
+
 /** Frame all elements (verified working; retry once late for font settling). */
 function fitView(a: ExcalidrawImperativeAPI): void {
   try {
@@ -54,17 +56,21 @@ export function fitViewport(
   vw: number,
   vh: number,
 ): Vp {
+  const finite = elements.filter(
+    (e) => [e.x, e.y, e.width, e.height].every((v) => typeof v === "number" && isFinite(v)),
+  );
+  if (finite.length === 0) return { scrollX: 0, scrollY: 0, zoom: { value: 1 } };
   const pad = 60;
   const topPad = 132; // clear the floating toolbar + hint text
-  const minX = Math.min(...elements.map((e) => e.x)) - pad;
-  const minY = Math.min(...elements.map((e) => e.y)) - pad;
-  const maxX = Math.max(...elements.map((e) => e.x + e.width)) + pad;
-  const maxY = Math.max(...elements.map((e) => e.y + e.height)) + pad;
+  const minX = Math.min(...finite.map((e) => e.x)) - pad;
+  const minY = Math.min(...finite.map((e) => e.y)) - pad;
+  const maxX = Math.max(...finite.map((e) => e.x + e.width)) + pad;
+  const maxY = Math.max(...finite.map((e) => e.y + e.height)) + pad;
   const zoom = Math.min(2, Math.min(vw / (maxX - minX), (vh - topPad) / (maxY - minY)));
   return {
     scrollX: (-(minX + maxX) / 2) * zoom + vw / 2,
     scrollY: -minY * zoom + topPad,
-    zoom: { value: zoom },
+    zoom: { value: isFinite(zoom) && zoom > 0 ? zoom : 1 },
   };
 }
 
@@ -121,12 +127,34 @@ function App(): React.ReactElement {
         body: JSON.stringify({ rev: revRef.current, elements }),
       });
       if (r.status === 409) {
+        // Someone (agent/CLI) wrote first: merge our edits on top of theirs
+        // and retry once with the fresh rev, instead of discarding our work.
         const fresh = (await r.json()) as { context: Ctx };
-        revRef.current = fresh.context.rev;
-        setRev(fresh.context.rev);
-        lastSaved.current = canon(fresh.context.scene.elements);
-        a.updateScene({ elements: fresh.context.scene.elements as never });
-        setSync("merged remote change");
+        const merged = mergeElements(
+          fresh.context.scene.elements,
+          elements as Record<string, unknown>[],
+        );
+        const r2 = await fetch("/api/scene", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ rev: fresh.context.rev, elements: merged }),
+        });
+        if (r2.status === 409 || !r2.ok) {
+          // Lost the race twice — take remote, user can re-apply.
+          const latest = r2.status === 409 ? ((await r2.json()) as { context: Ctx }).context : fresh.context;
+          revRef.current = latest.rev;
+          setRev(latest.rev);
+          lastSaved.current = canon(latest.scene.elements);
+          a.updateScene({ elements: latest.scene.elements as never });
+          setSync("remote won — re-apply your edit");
+          return;
+        }
+        const data2 = (await r2.json()) as { rev: number };
+        revRef.current = data2.rev;
+        setRev(data2.rev);
+        lastSaved.current = canon(merged);
+        a.updateScene({ elements: merged as never });
+        setSync("merged with remote change");
         return;
       }
       if (!r.ok) throw new Error(`save: HTTP ${r.status}`);
@@ -167,8 +195,10 @@ function App(): React.ReactElement {
           lastSaved.current = canon(ctx.scene.elements);
           const a = (window as unknown as { __exaApi?: ExcalidrawImperativeAPI }).__exaApi;
           if (a) {
+            // Elements only — never touch the viewport here, or every agent
+            // render would yank the user's zoom/pan. Initial framing happens
+            // once via initialData.
             a.updateScene({ elements: ctx.scene.elements as never });
-            setTimeout(() => fitView(a), 200);
           }
           setSync("updated from file");
           setTimeout(() => setSync("synced"), 2000);

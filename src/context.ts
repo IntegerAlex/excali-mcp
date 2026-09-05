@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 
 /**
@@ -41,11 +41,31 @@ export async function loadContext(path: string): Promise<DiagramContext> {
   }
   if (!existsSync(path)) return blankContext();
   const raw = await readFile(path, "utf8");
-  const c = JSON.parse(raw) as DiagramContext;
-  if (!c.scene) c.scene = { type: "excalidraw", version: 2, elements: [] };
-  if (typeof c.rev !== "number") c.rev = 0;
-  if (typeof c.mermaidSource !== "string") c.mermaidSource = "";
-  return c;
+  try {
+    const c = JSON.parse(raw) as DiagramContext;
+    if (!c.scene) c.scene = { type: "excalidraw", version: 2, elements: [] };
+    if (typeof c.rev !== "number") c.rev = 0;
+    if (typeof c.mermaidSource !== "string") c.mermaidSource = "";
+    return c;
+  } catch (e) {
+    // Corrupt file (crash mid-write, hand-edit gone wrong): quarantine it,
+    // start blank. Never crash the server/CLI on a bad JSON file.
+    const backup = `${path}.corrupt-${Date.now()}`;
+    try {
+      await writeFile(backup, raw);
+    } catch {
+      /* best effort */
+    }
+    console.error(`[context] ${path} is corrupt (${e instanceof Error ? e.message : String(e)}); backed up to ${backup}, starting blank.`);
+    return blankContext();
+  }
+}
+
+/** Crash-safe write: tmp file + rename, so readers never see half a JSON. */
+async function writeAtomic(path: string, data: string): Promise<void> {
+  const tmp = `${path}.tmp-${process.pid}`;
+  await writeFile(tmp, data);
+  await rename(tmp, path);
 }
 
 /** Applies patch, bumps rev, writes file + sidecars. Returns the new context. */
@@ -67,10 +87,10 @@ export async function saveContext(
       elements: patch.elements !== undefined ? patch.elements : prev.scene.elements,
     },
   };
-  await writeFile(path, JSON.stringify(next, null, 2));
+  await writeAtomic(path, JSON.stringify(next, null, 2));
   // sidecars for direct import into excalidraw.com
   const base = path.replace(/\.context\.json$/, "").replace(/\.json$/, "");
-  await writeFile(`${base}.excalidraw.json`, JSON.stringify({ ...next.scene, source: "diagram-tool", appState: {} }, null, 2));
-  await writeFile(`${base}.mmd`, (next.mermaidSource ? next.mermaidSource + "\n" : ""));
+  await writeAtomic(`${base}.excalidraw.json`, JSON.stringify({ ...next.scene, source: "diagram-tool", appState: {} }, null, 2));
+  await writeAtomic(`${base}.mmd`, (next.mermaidSource ? next.mermaidSource + "\n" : ""));
   return next;
 }
