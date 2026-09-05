@@ -31,6 +31,22 @@ Then ask your agent to draw something, open the returned `url` once — it live-
 
 Tools: `render_diagram(mermaidSource, prompt?, decorations?)` · `get_diagram()` · `list_libraries(query?)` · `list_library_items(library)` · resource `diagram-tool://guide`. Full authoring doc: [GUIDE.md](GUIDE.md) (also served to agents via the guide resource, so no LLM setup is needed).
 
+## Example: agent-drawn S3 system design
+
+Prompt: `crete a system design diagram for amason S3 filesystem` (typos and all — the agent copes).
+
+The agent discovers icons first, then renders — MCP calls, verbatim:
+
+![Agent discovering AWS libraries and rendering via MCP](agent-using-mcp.png)
+
+Result summary with the live link (rev 1, 71 elements, sidecars written):
+
+![Render result: live whiteboard URL, element count, design breakdown](localhost-link.png)
+
+And the whiteboard itself — icons merged into their nodes, arrows on dagre's own routing:
+
+![Amazon S3 filesystem system design: edge, frontend fleet, metadata index, AZ partitions, lifecycle, events](output.png)
+
 ## The context file (source of truth)
 
 Everything revolves around `diagram-tool.context.json`:
@@ -75,4 +91,4 @@ diagram-tool edit "add a retry step" --provider openrouter
 
 Flags: `--provider openai|anthropic|google|ollama|openrouter`, `--model`, `--api-key`, `--base-url`, `--port`, `--no-serve`, `--context`.
 
-Pipeline: strict Mermaid parse → `mermaid-to-excalidraw` (browser-faithful SVG geometry via attribute-aware measurement) → flowchart-only dedupe → overlap declutter → edge-label slide. The viewer ships Excalidraw's real canvas fonts, so what the agent lays out is what you see.
+Pipeline: strict Mermaid parse → `mermaid-to-excalidraw` (dagre layout ships as-is — no post-passes) → flowchart-only arrow dedupe → icon replacement (scale-to-fit in the SDK box, opt-in `allowGrow` on proven slack) → arrow-label detach. The viewer ships Excalidraw's real canvas fonts, so what the agent lays out is what you see.
