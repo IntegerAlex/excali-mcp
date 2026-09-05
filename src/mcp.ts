@@ -53,6 +53,7 @@ const TOOLS = [
               library: { type: "string", description: "Library slug, e.g. aws-serverless." },
               itemIndex: { type: "integer", description: "Item index from list_library_items." },
               node: { type: "string", description: "Target diagram node id or label. REQUIRED for a clean result — without it the icon may land in a disconnected row." },
+              allowGrow: { type: "boolean", description: "Enlarge the node box to fit art + caption (default false = art scales to fit the SDK box). Growth applies only if the grown rect is clear of neighbors; otherwise it silently fits. Use when the icon renders too small." },
               libraryUrl: { type: "string", description: "Custom .excalidrawlib URL (rarely needed)." },
               scale: { type: "number", description: "Scale multiplier, default 1." },
               x: { type: "number", description: "Explicit x (default: auto-tiled row)." },

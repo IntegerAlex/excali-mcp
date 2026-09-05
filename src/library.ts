@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { declutter, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, spreadArrowEnds } from "./geometry.js";
+import { detachArrowLabels, reanchor } from "./geometry.js";
 
 export interface LibraryItem {
   id: string;
@@ -303,6 +303,10 @@ export interface Decoration {
   /** Target diagram node id or label, e.g. "SQS". The agent knows the mapping — prefer this over auto-match. */
   node?: string;
   scale?: number;
+  /** Opt-in box enlargement: grow to fit art + caption only when the grown
+   *  rect (20px margin) is clear of every other element. Default false =
+   *  scale-to-fit inside the SDK box (never invalidates dagre spacing). */
+  allowGrow?: boolean;
   x?: number;
   y?: number;
 }
@@ -358,19 +362,81 @@ export function nodeNames(elements: Record<string, unknown>[]): string[] {
 const numf = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
 
 /**
+ * Single bounded collision check for allowGrow: is `rect` (plus margin)
+ * clear of every element except the node being replaced (its box dies and
+ * its captions move with it)? One O(n) test per decoration — not an
+ * iterative global pass. Arrows count via their point bboxes, so growth
+ * never swallows a routed edge either.
+ */
+function grownRectClear(
+  elements: Record<string, unknown>[],
+  selfIds: Set<string>,
+  rect: { x: number; y: number; w: number; h: number },
+  margin = 20,
+): boolean {
+  const rx1 = rect.x - margin;
+  const ry1 = rect.y - margin;
+  const rx2 = rect.x + rect.w + margin;
+  const ry2 = rect.y + rect.h + margin;
+  const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : NaN);
+  for (const e of elements) {
+    if (selfIds.has(String(e.id))) continue;
+    let x1 = num(e.x);
+    let y1 = num(e.y);
+    let x2 = NaN;
+    let y2 = NaN;
+    if (e.type === "arrow") {
+      // Incident arrows terminate on this node by design (reanchor moves
+      // their endpoints onto the grown border) — only pass-through edges
+      // count as collisions.
+      const sId = (e.start as { id?: string } | undefined)?.id;
+      const tId = (e.end as { id?: string } | undefined)?.id;
+      if ((sId !== undefined && selfIds.has(String(sId))) || (tId !== undefined && selfIds.has(String(tId)))) continue;
+      const pts = e.points as [number, number][] | undefined;
+      if (!Array.isArray(pts) || pts.length === 0) continue;
+      const ox = num(e.x);
+      const oy = num(e.y);
+      if (!isFinite(ox) || !isFinite(oy)) continue;
+      const px = pts.map((p) => ox + num(p[0])).filter((v) => isFinite(v));
+      const py = pts.map((p) => oy + num(p[1])).filter((v) => isFinite(v));
+      if (px.length === 0 || py.length === 0) continue;
+      x1 = Math.min(...px);
+      y1 = Math.min(...py);
+      x2 = Math.max(...px);
+      y2 = Math.max(...py);
+    } else {
+      const w = num(e.width);
+      const h = num(e.height);
+      if (!isFinite(x1) || !isFinite(y1) || !isFinite(w) || !isFinite(h)) continue;
+      x2 = x1 + w;
+      y2 = y1 + h;
+    }
+    if (rx1 < x2 && rx2 > x1 && ry1 < y2 && ry2 > y1) return false;
+  }
+  return true;
+}
+
+/**
  * Icon-AS-node: delete the converter box, put library art in its place with
  * the mermaid caption stacked below, re-anchor arrows onto the final border.
- * Unknown/degenerate input degrades to `false` (caller falls back) — never throws.
+ *
+ * Scale-to-fit by default: the box keeps dagre's exact rect, so neighbor
+ * spacing stays valid — art takes the box minus the caption strip. Small
+ * boxes mean small art; pass allowGrow to enlarge instead, which applies
+ * only when the grown rect has slack (single bounded check, else fit).
+ * Unknown/degenerate input degrades to unreplaced — never throws.
  */
 export function replaceNodeWithIcon(
   elements: Record<string, unknown>[],
   nodeId: string,
   template: Record<string, unknown>[],
-): boolean {
+  opts: { allowGrow?: boolean } = {},
+): { replaced: boolean; grew: boolean } {
+  const none = { replaced: false, grew: false };
   const idx = elements.findIndex(
     (e) => String(e.id) === nodeId && (e.type === "rectangle" || e.type === "diamond" || e.type === "ellipse"),
   );
-  if (idx === -1) return false;
+  if (idx === -1) return none;
   const node = elements[idx]!;
   const captions = elements.filter((e) => e.type === "text" && e.containerId === nodeId);
   const capW = Math.max(0, ...captions.map((c) => numf(c.width, 40)), 40) + 34;
@@ -391,29 +457,90 @@ export function replaceNodeWithIcon(
     w: Math.max(1, numf(node.width, 80)),
     h: Math.max(1, numf(node.height, 40)),
   };
-  const newW = Math.max(oldBox.w, 132, capW);
-  const newH = Math.max(oldBox.h, 140) + stripH;
-  const box = { x: oldBox.x - (newW - oldBox.w) / 2, y: oldBox.y - (newH - oldBox.h) / 2, w: newW, h: newH };
+  const wantW = Math.max(oldBox.w, 132, capW);
+  const wantH = Math.max(oldBox.h, 140) + stripH;
+  // Default: dagre's rect stands (neighbor spacing stays valid). Grow only
+  // on explicit allowGrow AND proven slack — otherwise silently fit.
+  let box = { ...oldBox };
+  let grew = false;
+  if (opts.allowGrow && (wantW > oldBox.w + 1 || wantH > oldBox.h + 1)) {
+    const grown = {
+      x: oldBox.x - (wantW - oldBox.w) / 2,
+      y: oldBox.y - (wantH - oldBox.h) / 2,
+      w: wantW,
+      h: wantH,
+    };
+    const selfIds = new Set([nodeId, ...captions.map((c) => String(c.id))]);
+    if (grownRectClear(elements, selfIds, grown)) {
+      box = grown;
+      grew = true;
+    }
+  }
   const groupId = `icon-${nodeId}`;
-  const art = instantiateIcon(template, box, groupId, stripH);
-  if (art.length === 0) return false;
-  // Commit: remove box, place art, stack captions in the bottom strip.
+  // Commit: remove box, place art. Grown boxes stack captions in the bottom
+  // strip; fit keeps dagre's rect and sets art left, caption right.
   elements.splice(idx, 1);
-  elements.push(...art);
-  let cy = box.y + box.h - 6;
-  const stacked = [...captions].reverse();
-  for (const c of stacked) {
-    const fs = numf(c.fontSize, 16);
-    const ch = numf(c.height, fs * 1.3);
-    cy -= ch + 4;
-    c.y = cy;
-    c.x = box.x + box.w / 2 - numf(c.width, 40) / 2;
-    delete c.containerId;
-    const g = c.groupIds as string[] | undefined;
-    c.groupIds = [...(g ?? []), groupId];
+  // The box dies but its identity shouldn't: re-add the same rect (dagre
+  // geometry + the node's own colors) behind the art, or decorated nodes
+  // render as floating text while every plain node keeps its colored box.
+  const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : 0);
+  elements.splice(idx, 0, {
+    id: freshId(),
+    type: "rectangle",
+    x: box.x,
+    y: box.y,
+    width: box.w,
+    height: box.h,
+    angle: 0,
+    strokeColor: node.strokeColor ?? "#1e1e1e",
+    backgroundColor: node.backgroundColor ?? "transparent",
+    fillStyle: node.fillStyle ?? "solid",
+    strokeWidth: num(node.strokeWidth) || 2,
+    strokeStyle: node.strokeStyle ?? "solid",
+    roughness: num(node.roughness) || 1,
+    opacity: num(node.opacity) || 100,
+    ...(node.roundness !== undefined ? { roundness: node.roundness } : {}),
+    groupIds: [groupId],
+    seed: Math.floor(Math.random() * 2 ** 31),
+    versionNonce: Math.floor(Math.random() * 2 ** 31),
+  });
+  if (grew) {
+    const art = instantiateIcon(template, box, groupId, stripH);
+    if (art.length === 0) return none;
+    elements.push(...art);
+    let cy = box.y + box.h - 6;
+    const stacked = [...captions].reverse();
+    for (const c of stacked) {
+      const fs = numf(c.fontSize, 16);
+      const ch = numf(c.height, fs * 1.3);
+      cy -= ch + 4;
+      c.y = cy;
+      c.x = box.x + box.w / 2 - numf(c.width, 40) / 2;
+      delete c.containerId;
+      const g = c.groupIds as string[] | undefined;
+      c.groupIds = [...(g ?? []), groupId];
+    }
+  } else {
+    const artSize = Math.max(8, box.h - 16);
+    const art = instantiateIcon(template, box, groupId, 0, artSize);
+    if (art.length === 0) return none;
+    elements.push(...art);
+    const ax2 = Math.max(...art.map((a) => numf(a.x) + numf(a.width, 0)));
+    const ax = ax2 + 12;
+    const boxRight = box.x + box.w;
+    for (const c of captions) {
+      const capW = numf(c.width, 40);
+      const remaining = boxRight - ax;
+      // Center in the space right of the art; wider captions left-align at
+      // the art edge and spill right into the rank gap (never over the art).
+      c.x = capW <= remaining ? ax + (remaining - capW) / 2 : ax;
+      delete c.containerId;
+      const g = c.groupIds as string[] | undefined;
+      c.groupIds = [...(g ?? []), groupId];
+    }
   }
   reanchor(elements, nodeId, box);
-  return true;
+  return { replaced: true, grew };
 }
 
 /**
@@ -423,14 +550,14 @@ export function replaceNodeWithIcon(
 export async function applyDecorations(
   elements: Record<string, unknown>[],
   decorations: Decoration[],
-): Promise<{ added: number; placed: { library: string; itemIndex: number; elementIds: string[]; node?: string }[] }> {
+): Promise<{ added: number; placed: { library: string; itemIndex: number; elementIds: string[]; node?: string; grew?: boolean }[] }> {
   if (decorations.length > 6) throw new Error("Max 6 decorations per render (keeps diagrams readable).");
   const num = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
   const xs = elements.flatMap((e) => (typeof e.x === "number" && typeof e.width === "number" ? [e.x as number, (e.x as number) + (e.width as number)] : []));
   const ys = elements.flatMap((e) => (typeof e.y === "number" && typeof e.height === "number" ? [e.y as number, (e.y as number) + (e.height as number)] : []));
   let cursorX = xs.length ? Math.min(...xs) : 0;
   const baseY = ys.length ? Math.max(...ys) + 60 : 0;
-  const placed: { library: string; itemIndex: number; elementIds: string[]; node?: string }[] = [];
+  const placed: { library: string; itemIndex: number; elementIds: string[]; node?: string; grew?: boolean }[] = [];
   let added = 0;
   for (const d of decorations) {
     const { groups, names } = await loadLibraryBySlug(d.library, d.libraryUrl);
@@ -473,9 +600,12 @@ export async function applyDecorations(
         );
       }
     }
-    if (nodeId && d.x === undefined && d.y === undefined && replaceNodeWithIcon(elements, nodeId, template)) {
-      placed.push({ library: d.library, itemIndex: d.itemIndex, elementIds: [nodeId], node: nodeId });
-      continue;
+    if (nodeId && d.x === undefined && d.y === undefined) {
+      const r = replaceNodeWithIcon(elements, nodeId, template, { allowGrow: d.allowGrow === true });
+      if (r.replaced) {
+        placed.push({ library: d.library, itemIndex: d.itemIndex, elementIds: [nodeId], node: nodeId, grew: r.grew });
+        continue;
+      }
     }
     const scale = d.scale ?? 1;
     // bbox of template
@@ -518,27 +648,31 @@ export async function applyDecorations(
     if (d.x === undefined) cursorX += w + 40;
     placed.push({ library: d.library, itemIndex: d.itemIndex, elementIds: ids });
   }
-  // Replacements change footprints: re-run layout + label passes.
-  declutter(elements);
-  slideEdgeLabelsOutOfNodes(elements);
-  spreadArrowEnds(elements);
-  // Detach last — labels must stay bound during declutter/slide so they
-  // move with their arrows. Excalidraw re-snaps bound text to midpoint
-  // at render time, undoing any manual positioning.
+  // No layout passes after replacement: boxes keep dagre rects (fit) or
+  // provably-clear grown rects, so there is nothing to repair. Detach last —
+  // labels stay bound through reanchor shifts; Excalidraw would re-snap
+  // bound text to arrow midpoints at render time.
   detachArrowLabels(elements);
   return { added, placed };
 }
 
 /**
  * Fit a library item's artwork into a node card: strip its own caption text
- * (the node's label stays), normalize coords, scale into the top of the box,
- * node caption pinned to the bottom strip.
+ * (the node's label stays), normalize coords, scale into place.
+ *
+ * Two layouts, both footprint-preserving:
+ * - stack (grown boxes): art scales into the box minus `bottomStrip`;
+ *   node captions stack in the strip below the artwork.
+ * - side (scale-to-fit): art is a left-hand square of `sideArtSize`;
+ *   the caption keeps its size/height and shifts right of the art. Dagre
+ *   boxes are wide+short, so side-by-side is the only fit without growth.
  */
 export function instantiateIcon(
   template: Record<string, unknown>[],
   box: { x: number; y: number; w: number; h: number },
   groupId: string,
   bottomStrip = 0,
+  sideArtSize = 0,
 ): Record<string, unknown>[] {
   const art = template.filter((e) => e.type !== "text");
   const xs: number[] = [];
@@ -557,13 +691,18 @@ export function instantiateIcon(
   const minY = Math.min(...ys);
   const natW = Math.max(1, Math.max(...xs) - minX);
   const natH = Math.max(1, Math.max(...ys) - minY);
-  // Captions live in the reserved strip below, so the art area needs only a
-  // small top/bottom pad — not the legacy 46px overlap allowance.
-  const targetH = Math.max(64, box.h - Math.max(0, bottomStrip) - 24);
-  const targetW = Math.max(24, box.w - 24);
+  // Captions live in the reserved strip below, so the art area is whatever
+  // the box has left after it — no minimum floor (floors reintroduce the
+  // spill that scale-to-fit is meant to end; small boxes mean small art).
+  // Side layout instead fits a left-hand square of sideArtSize.
+  const side = sideArtSize > 0;
+  const targetH = side ? Math.max(8, sideArtSize) : Math.max(8, box.h - Math.max(0, bottomStrip) - 24);
+  const targetW = side ? Math.max(8, sideArtSize) : Math.max(24, box.w - 24);
   const s = Math.min(targetW / natW, targetH / natH);
-  const offX = box.x + box.w / 2 - (natW * s) / 2 - minX * s;
-  const offY = box.y + 10 - minY * s;
+  const offX = side ? box.x + 8 - minX * s : box.x + box.w / 2 - (natW * s) / 2 - minX * s;
+  const offY = side
+    ? box.y + box.h / 2 - (natH * s) / 2 - minY * s
+    : box.y + 10 - minY * s;
   const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : 0);
   // Points are relative to element x/y: scale them too, or art renders at
   // template-native size inside a scaled box (tiny glyph in a big card).

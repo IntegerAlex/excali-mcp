@@ -13,11 +13,11 @@ export const RENDER_DESCRIPTION = `Validate + render Mermaid into the shared Exc
 
 TYPE CHOICE: processes/decisions/architecture -> flowchart (LR wide, TD tall); interactions over time -> sequenceDiagram; data models -> erDiagram; OOP -> classDiagram; states -> stateDiagram-v2.
 
-FLOWCHART RULES: init line first: %%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140, "curve": "linear"}}}%%. SELF-EXPLANATORY node ids (CLI, CTXFILE — never A/B/C). Declare ALL nodes first, then edges grouped with %% comments + blank lines (NO subgraphs — the renderer cannot draw them). Edge labels pipe-only: -->|reads|. Shape by role: rhombus {..} for decisions, [...] for everything else. End with palette + class on EVERY node: classDef actor fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px / store fill:#fff3e0,stroke:#fb8c00 / flow fill:#e8f5e9,stroke:#43a047 / ext fill:#f3e5f5,stroke:#8e24aa. Max ~12 nodes. Hub with many edges -> TD. Max 3 edges per node; one edge per node pair (merge labels with " · "). Renders return warnings for fan-in hot spots (>5 edges/node) — restructure when present.
+FLOWCHART RULES: init line first: %%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140}}}%%. SELF-EXPLANATORY node ids (CLI, CTXFILE — never A/B/C). Declare ALL nodes first, then edges grouped with %% comments + blank lines (NO subgraphs — the renderer cannot draw them). Edge labels pipe-only: -->|reads|. Shape by role: rhombus {..} for decisions, [...] for everything else. End with palette + class on EVERY node: classDef actor fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px / store fill:#fff3e0,stroke:#fb8c00 / flow fill:#e8f5e9,stroke:#43a047 / ext fill:#f3e5f5,stroke:#8e24aa. Max ~12 nodes. Hub with many edges -> TD. Max 3 edges per node; one edge per node pair (merge labels with " · "). Renders return warnings for fan-in hot spots (>5 edges/node) — restructure when present.
 
 Example:
 \`\`\`mermaid
-%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140, "curve": "linear"}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140}}}%%
 flowchart LR
     USER["User"]
     CLI["diagram-tool CLI"]
@@ -57,7 +57,7 @@ export const GUIDE = `# Diagram Tool agent guide
 
 ## Few-shot: flowchart LR
 \`\`\`mermaid
-%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140, "curve": "linear"}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140}}}%%
 flowchart LR
     USER["User"]
     CLI["diagram-tool CLI"]
@@ -89,7 +89,7 @@ sequenceDiagram
 ## Libraries: mandatory trigger, then choose
 - TRIGGER (must use icons): request mentions AWS, GCP, Azure, Kubernetes, Docker, cloud, network, infrastructure, or icons/logos — or names services like Lambda, S3, EC2. Then: \`list_libraries\` -> \`list_library_items\` -> pass picks as \`decorations\` (max ~6). Skipping icons on these diagrams is wrong.
 - Cloud/architecture/system-design -> vendor libs (aws/gcp/azure/kubernetes); network topologies -> \`network-topology-icons\`.
-- Icons decorate labeled boxes; never drop labels.
+- Icons decorate labeled boxes; never drop labels. Icons scale to fit the node box by default — pass \`allowGrow: true\` on a decoration only when the art renders too small (growth applies solely if neighbors have slack, else it fits).
 - NO libraries for: logic flowcharts, sequence/ER/class/state diagrams (pure mermaid reads better).
 - Node icon classes (\`class USER actor,icon_user\`) also work with the 10 bundled slugs: icon_user, icon_users, icon_home, icon_lock, icon_search, icon_chart, icon_email, icon_calendar, icon_location, icon_payment.
 

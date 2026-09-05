@@ -3,8 +3,8 @@ import mermaid from "mermaid";
 import { parseMermaidToExcalidraw } from "@excalidraw/mermaid-to-excalidraw";
 import { complete, type ChatMsg, type LlmOpts } from "./llm.js";
 import { loadIconTemplates } from "./library.js";
-import { declutter, dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, spreadArrowEnds, withBoundLabels } from "./geometry.js";
-export { declutter, dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, spreadArrowEnds, straightenArrows, withBoundLabels } from "./geometry.js";
+import { dedupeArrows, withBoundLabels } from "./geometry.js";
+export { dedupeArrows, detachArrowLabels, reanchor, withBoundLabels } from "./geometry.js";
 import { existsSync } from "node:fs";
 
 export interface Scene {
@@ -25,7 +25,7 @@ TYPE CHOICE:
 
 FLOWCHART CRAFT (applies to every flowchart):
 - Start with this init line for breathing room (exact syntax):
-  %%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140, "curve": "linear"}}}%%
+  %%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140}}}%%
 - Use SELF-EXPLANATORY node ids (CLI, CTXFILE, WEBUI — never A/B/C).
 - Declare ALL nodes first (one per line), then edges grouped with blank lines between logical groups. Add %% comments per group.
 - Structure with %% section comments + blank lines, NOT subgraphs: the renderer cannot draw subgraphs and degrades the whole diagram. Example:
@@ -56,7 +56,7 @@ SEQUENCE CRAFT: participants declared first with aliases (participant C as Clien
 
 Example (note ids, declare-first, section comments, classes):
 \`\`\`mermaid
-%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140, "curve": "linear"}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 140}}}%%
 flowchart LR
     USER(["User"])
     CLI["diagram-tool CLI"]
@@ -117,8 +117,12 @@ export async function validateMermaid(source: string): Promise<string> {
 }
 
 export async function convertToScene(mermaidSource: string): Promise<Scene> {
+  // SDK-faithful: no post-layout passes. dagre's node placement + arrow
+  // routing ship as-is; only withBoundLabels (skeleton label props are not
+  // real text elements), dedupeArrows (model duplicate-edge habit), and
+  // icon replacement touch the scene. detachArrowLabels runs last in the
+  // MCP handler / applyDecorations (labels stay bound until then).
   const { elements } = await parseMermaidToExcalidraw(mermaidSource, {
-    flowchart: { curve: "linear" },
     themeVariables: { fontSize: "20px" },
     maxEdges: 500,
   });
@@ -137,14 +141,7 @@ export async function convertToScene(mermaidSource: string): Promise<Scene> {
   const isFlow = sniffDiagramType(mermaidSource) === "flowchart" || sniffDiagramType(mermaidSource) === "graph";
   let out = withBoundLabels(els);
   if (isFlow) out = dedupeArrows(out);
-  out = declutter(out);
   if (isFlow) out = await applyIcons(out, mermaidSource);
-  out = declutter(out);
-  out = slideEdgeLabelsOutOfNodes(out);
-  spreadArrowEnds(out);
-  // NOTE: detachArrowLabels is NOT called here. When decorations are
-  // applied, labels must stay bound during declutter so they move with
-  // arrows. The MCP handler (or applyDecorations) calls detach last.
   return {
     type: "excalidraw",
     version: 2,
