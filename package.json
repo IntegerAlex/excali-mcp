@@ -7,7 +7,9 @@
   },
   "files": [
     "dist",
-    "libraries"
+    "libraries",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "dev": "tsx src/cli.ts",
@@ -24,7 +26,7 @@
     "mermaid": "11.17.2"
   },
   "devDependencies": {
-    "@excalidraw/excalidraw": "0.18.0",
+    "@excalidraw/excalidraw": "0.18.1",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.31",
