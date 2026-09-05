@@ -86,6 +86,16 @@ function ensureMermaid(): void {
   }
 }
 
+/** First non-comment token: flowchart, sequenceDiagram, erDiagram, ... */
+export function sniffDiagramType(source: string): string {
+  const code = source
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("%%"))
+    .join("\n")
+    .trim();
+  return code.split(/\s+/)[0] ?? "";
+}
+
 export function extractMermaid(raw: string): string {
   const m = /```mermaid\s*([\s\S]*?)```/i.exec(raw);
   if (m?.[1]?.trim()) return m[1].trim();
@@ -94,13 +104,7 @@ export function extractMermaid(raw: string): string {
 
 export async function validateMermaid(source: string): Promise<string> {
   ensureMermaid();
-  // Strip leading %% comments / %%{init}%% directives before type detection.
-  const code = source
-    .split("\n")
-    .filter((l) => !l.trimStart().startsWith("%%"))
-    .join("\n")
-    .trim();
-  const diagramType = code.split(/\s+/)[0] ?? "";
+  const diagramType = sniffDiagramType(source);
   if (!SUPPORTED.has(diagramType)) {
     throw new Error(`Unsupported diagram type "${diagramType}". Supported: flowchart, sequenceDiagram, erDiagram, classDiagram, stateDiagram-v2.`);
   }
@@ -123,11 +127,20 @@ export async function convertToScene(mermaidSource: string): Promise<Scene> {
       "Converter produced no drawable elements (likely an unsupported construct such as subgraph — flatten it into plain nodes + edges).",
     );
   }
+  // dedupeArrows exists for the model's flowchart habit of emitting one edge
+  // per action between the same pair. In sequences/ER/class diagrams repeated
+  // same-pair links are meaningful — merging deletes real messages. Gate it.
+  const isFlow = sniffDiagramType(mermaidSource) === "flowchart" || sniffDiagramType(mermaidSource) === "graph";
+  let out = withBoundLabels(els);
+  if (isFlow) out = dedupeArrows(out);
+  out = declutter(out);
+  if (isFlow) out = await applyIcons(out, mermaidSource);
+  out = declutter(out);
   return {
     type: "excalidraw",
     version: 2,
     source: "diagram-tool",
-    elements: declutter(await applyIcons(declutter(dedupeArrows(withBoundLabels(els))), mermaidSource)),
+    elements: out,
     appState: {},
   };
 }
@@ -136,7 +149,7 @@ export async function convertToScene(mermaidSource: string): Promise<Scene> {
 export function parseIconClasses(mermaidSource: string): Map<string, string> {
   const out = new Map<string, string>();
   for (const line of mermaidSource.split("\n")) {
-    const m = /^\s*class\s+([\w,\s]+?)\s+([\w,\s]+?)\s*$/.exec(line);
+    const m = /^\s*class\s+([\w,\s-]+?)\s+([\w,\s-]+?)\s*$/.exec(line);
     if (!m) continue;
     const nodes = m[1]!.split(",").map((s) => s.trim()).filter(Boolean);
     const classes = m[2]!.split(",").map((s) => s.trim()).filter(Boolean);
@@ -151,6 +164,7 @@ export function parseIconClasses(mermaidSource: string): Map<string, string> {
 }
 
 let iconCache: Promise<Map<string, Record<string, unknown>[]>> | null = null;
+let autoIdCounter = 0;
 
 /**
  * Dress node cards with library artwork: icon glyph fitted into the top of
@@ -204,18 +218,20 @@ export async function applyIcons(
   return elements;
 }
 
-/** Move arrow endpoints attached to `id` out onto the border of `box`. */
+/** Move arrow endpoints attached to `id` out onto the border of `box`.
+ *  All point math is coerced — degenerate input shifts nothing, never NaN. */
 function reanchor(elements: Record<string, unknown>[], id: string, box: { x: number; y: number; w: number; h: number }): void {
-  const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+  const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : 0);
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h / 2;
   const anchor = (px: number, py: number): [number, number] => {
-    const dx = px - cx;
-    const dy = py - cy;
+    const dx = num(px) - cx;
+    const dy = num(py) - cy;
     if (dx === 0 && dy === 0) return [cx, box.y - 2];
     const sx = dx !== 0 ? box.w / 2 / Math.abs(dx) : Infinity;
     const sy = dy !== 0 ? box.h / 2 / Math.abs(dy) : Infinity;
     const t = Math.min(sx, sy) + 2 / Math.max(Math.abs(dx), Math.abs(dy), 1);
+    if (!isFinite(t)) return [cx, box.y - 2];
     return [cx + dx * t, cy + dy * t];
   };
   for (const e of elements) {
@@ -266,10 +282,15 @@ export function dedupeArrows(elements: Record<string, unknown>[]): Record<string
     const t = (e.end as { id?: string } | undefined)?.id;
     return s && t ? `${s}\u0000${t}` : null;
   };
+  // Identity-based throughout: the SDK reuses one id for parallel same-pair
+  // arrows ("A_B" x2) and leaves others id-less, so id strings can never
+  // identify a single element. Keeper claims its label first (labels are
+  // created in element order, matching their arrows).
   const seen = new Map<string, Record<string, unknown>>();
-  const drop = new Set<string>();
-  const labelOf = (arrowId: string): Record<string, unknown> | undefined =>
-    elements.find((e) => e.type === "text" && e.containerId === arrowId && !drop.has(String(e.id)));
+  const drop = new Set<Record<string, unknown>>();
+  const claimed = new Set<Record<string, unknown>>();
+  const labelFor = (arrow: Record<string, unknown>): Record<string, unknown> | undefined =>
+    elements.find((e) => e.type === "text" && e.containerId === arrow.id && !drop.has(e) && !claimed.has(e));
 
   for (const e of elements) {
     if (e.type !== "arrow") continue;
@@ -281,10 +302,12 @@ export function dedupeArrows(elements: Record<string, unknown>[]): Record<string
       continue;
     }
     // duplicate: fold its label into the keeper's, then remove arrow + label
-    const dupLabel = labelOf(String(e.id));
+    const keepLabel = labelFor(keeper);
+    if (keepLabel) claimed.add(keepLabel);
+    const dupLabel = labelFor(e);
+    if (dupLabel) claimed.add(dupLabel);
     if (dupLabel && typeof dupLabel.text === "string" && dupLabel.text) {
-      const keepLabel = labelOf(String(keeper.id));
-      if (keepLabel && typeof keepLabel.text === "string" && keepLabel.text) {
+      if (keepLabel && keepLabel !== dupLabel && typeof keepLabel.text === "string" && keepLabel.text) {
         const merged = `${keepLabel.text} · ${dupLabel.text as string}`;
         keepLabel.text = merged;
         keepLabel.originalText = merged;
@@ -296,11 +319,11 @@ export function dedupeArrows(elements: Record<string, unknown>[]): Record<string
         if (Array.isArray(bound)) bound.push({ id: String(dupLabel.id), type: "text" });
       }
     }
-    drop.add(String(e.id));
-    if (dupLabel && dupLabel.containerId === e.id) drop.add(String(dupLabel.id));
+    drop.add(e);
+    if (dupLabel && dupLabel.containerId === e.id) drop.add(dupLabel);
   }
   if (drop.size === 0) return elements;
-  return elements.filter((e) => !drop.has(String(e.id)));
+  return elements.filter((e) => !drop.has(e));
 }
 
 /**
@@ -320,23 +343,51 @@ export function declutter(elements: Record<string, unknown>[]): Record<string, u
     h: Math.max(1, num(e.height, 10)),
   });
   const movers = elements.filter((e) => e.type === "rectangle" || e.type === "diamond" || e.type === "ellipse");
+  // Sanitize stored dimensions: math below is guarded, but a NaN width/height
+  // must never reach the file/canvas.
+  for (const m of movers) {
+    m.width = Math.max(1, num(m.width, 10));
+    m.height = Math.max(1, num(m.height, 10));
+    m.x = num(m.x);
+    m.y = num(m.y);
+  }
 
-  const moveText = (containerId: string, dx: number, dy: number): void => {
+  const moveText = (containerId: string, dx: number, dy: number, moved: Set<string>): void => {
     for (const e of elements) {
-      if (e.type === "text" && e.containerId === containerId) {
+      if (e.type === "text" && e.containerId === containerId && !moved.has(String(e.id))) {
         e.x = num(e.x) + dx;
         e.y = num(e.y) + dy;
+        moved.add(String(e.id));
       }
     }
   };
 
-  /** Shift arrow endpoints attached to `id` by (dx,dy); returns actual applied delta for labels. */
+  /** Move everything grouped with the container (icon art, captions) as one unit. */
+  const moveGroup = (containerId: string, dx: number, dy: number, moved: Set<string>): void => {
+    const anchor = elements.find((e) => String(e.id) === containerId);
+    const groups = new Set((anchor?.groupIds as string[] | undefined) ?? []);
+    if (groups.size === 0) return;
+    for (const e of elements) {
+      if (moved.has(String(e.id))) continue;
+      const g = e.groupIds as string[] | undefined;
+      if (Array.isArray(g) && g.some((x) => groups.has(x))) {
+        e.x = num(e.x) + dx;
+        e.y = num(e.y) + dy;
+        moved.add(String(e.id));
+      }
+    }
+  };
+
+  /** Shift arrow endpoints attached to `id` by (dx,dy); point coords are
+   *  coerced — a single null/undefined point must not NaN the whole arrow. */
   const moveArrowEnds = (id: string, dx: number, dy: number): { dx: number; dy: number }[] => {
     const deltas: { dx: number; dy: number }[] = [];
     for (const e of elements) {
       if (e.type !== "arrow") continue;
-      const pts = e.points as [number, number][] | undefined;
-      if (!pts || pts.length === 0) continue;
+      const raw = e.points as [number, number][] | undefined;
+      if (!raw || raw.length === 0) continue;
+      const pts = raw.map(([px, py]) => [num(px), num(py)] as [number, number]);
+      e.points = pts;
       const start = e.start as { id?: string } | undefined;
       const end = e.end as { id?: string } | undefined;
       let usedDx = 0;
@@ -399,8 +450,11 @@ export function declutter(elements: Record<string, unknown>[]): Record<string, u
         A.y = num(A.y) + dyA;
         B.x = num(B.x) + dxB;
         B.y = num(B.y) + dyB;
-        moveText(String(A.id), dxA, dyA);
-        moveText(String(B.id), dxB, dyB);
+        const touched = new Set<string>([String(A.id), String(B.id)]);
+        moveText(String(A.id), dxA, dyA, touched);
+        moveText(String(B.id), dxB, dyB, touched);
+        moveGroup(String(A.id), dxA, dyA, touched);
+        moveGroup(String(B.id), dxB, dyB, touched);
         moveArrowEnds(String(A.id), dxA, dyA);
         moveArrowEnds(String(B.id), dxB, dyB);
       }
@@ -412,13 +466,13 @@ export function declutter(elements: Record<string, unknown>[]): Record<string, u
   // at its arrow's midpoint if it drifted more than 120px away.
   for (const e of elements) {
     if (e.type !== "arrow") continue;
-    const pts = e.points as [number, number][] | undefined;
-    if (!pts || pts.length === 0) continue;
+    const raw = e.points as [number, number][] | undefined;
+    if (!raw || raw.length === 0) continue;
     const ox = num(e.x);
     const oy = num(e.y);
-    const mid = pts[Math.floor(pts.length / 2)]!;
-    const mx = ox + mid[0];
-    const my = oy + mid[1];
+    const mid = raw[Math.floor(raw.length / 2)]!;
+    const mx = ox + num(mid[0]);
+    const my = oy + num(mid[1]);
     for (const t of elements) {
       if (t.type === "text" && t.containerId === e.id) {
         const cx = num(t.x) + num(t.width, 0) / 2;
@@ -441,11 +495,25 @@ export function declutter(elements: Record<string, unknown>[]): Record<string, u
 export function withBoundLabels(elements: Record<string, unknown>[]): Record<string, unknown>[] {
   const out = [...elements];
   for (const el of elements) {
+    // The SDK leaves some skeletons id-less (frame labels, notes). Excalidraw
+    // needs unique ids — synthesize before wiring anything by id.
+    if (typeof el.id !== "string" || !el.id) {
+      el.id = `auto-${Date.now().toString(36)}${(autoIdCounter++).toString(36)}`;
+    }
     const label = el.label as { text?: string; fontSize?: number } | undefined;
     if (!label || typeof label.text !== "string" || !label.text) continue;
     const fontSize = label.fontSize ?? 20;
-    const w = typeof el.width === "number" ? el.width : 80;
-    const h = typeof el.height === "number" ? el.height : 30;
+    // The SDK intentionally leaves label-driven boxes (e.g. alt-frame tags)
+    // unsized ("width calculated based on label"): fill from text metrics so
+    // no element ships with non-finite geometry. Real geometry is never touched.
+    if (typeof el.width !== "number" || !Number.isFinite(el.width)) {
+      el.width = Math.max(20, label.text.length * fontSize * 0.55) + 20;
+    }
+    if (typeof el.height !== "number" || !Number.isFinite(el.height)) {
+      el.height = fontSize * 1.3 + 12;
+    }
+    const w = el.width as number;
+    const h = el.height as number;
     const x = typeof el.x === "number" ? el.x : 0;
     const y = typeof el.y === "number" ? el.y : 0;
     const textW = Math.max(20, label.text.length * fontSize * 0.55);

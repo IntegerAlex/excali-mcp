@@ -377,8 +377,13 @@ export function instantiateIcon(
   const xs: number[] = [];
   const ys: number[] = [];
   for (const e of art) {
-    if (typeof e.x === "number" && typeof e.width === "number") xs.push(e.x as number, (e.x as number) + (e.width as number));
-    if (typeof e.y === "number" && typeof e.height === "number") ys.push(e.y as number, (e.y as number) + (e.height as number));
+    // Finite-only: one corrupt coordinate must not NaN the whole icon.
+    if (typeof e.x === "number" && isFinite(e.x) && typeof e.width === "number" && isFinite(e.width)) {
+      xs.push(e.x, e.x + e.width);
+    }
+    if (typeof e.y === "number" && isFinite(e.y) && typeof e.height === "number" && isFinite(e.height)) {
+      ys.push(e.y, e.y + e.height);
+    }
   }
   if (xs.length === 0 || ys.length === 0) return [];
   const minX = Math.min(...xs);
@@ -390,7 +395,7 @@ export function instantiateIcon(
   const s = Math.min(targetW / natW, targetH / natH);
   const offX = box.x + box.w / 2 - (natW * s) / 2 - minX * s;
   const offY = box.y + 10 - minY * s;
-  const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+  const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : 0);
   return art.map((e) => ({
     ...e,
     id: freshId(),
