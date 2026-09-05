@@ -136,6 +136,7 @@ export async function convertToScene(mermaidSource: string): Promise<Scene> {
   out = declutter(out);
   if (isFlow) out = await applyIcons(out, mermaidSource);
   out = declutter(out);
+  out = slideEdgeLabelsOutOfNodes(out);
   return {
     type: "excalidraw",
     version: 2,
@@ -483,6 +484,67 @@ export function declutter(elements: Record<string, unknown>[]): Record<string, u
         }
       }
     }
+  }
+  return elements;
+}
+
+/**
+ * Mermaid centers edge labels on arrow midpoints, which on short edges lands
+ * inside a node box. Slide such labels along the arrow until clear. Bound
+ * text stays associated via containerId, so this never detaches meaning.
+ */
+export function slideEdgeLabelsOutOfNodes(elements: Record<string, unknown>[]): Record<string, unknown>[] {
+  const num = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
+  const boxes = elements.filter(
+    (e) =>
+      (e.type === "rectangle" || e.type === "diamond" || e.type === "ellipse") &&
+      [e.x, e.y, e.width, e.height].every((v) => typeof v === "number" && isFinite(v)),
+  );
+  if (boxes.length === 0) return elements;
+  const MARGIN = 10;
+  const inside = (x: number, y: number): boolean =>
+    boxes.some((b) => {
+      const bx = num(b.x);
+      const by = num(b.y);
+      const bw = num(b.width);
+      const bh = num(b.height);
+      return x >= bx - MARGIN && x <= bx + bw + MARGIN && y >= by - MARGIN && y <= by + bh + MARGIN;
+    });
+  for (const t of elements) {
+    if (t.type !== "text" || typeof t.containerId !== "string") continue;
+    const arrow = elements.find((e) => e.type === "arrow" && e.id === t.containerId);
+    if (!arrow) continue;
+    if ([t.x, t.y, t.width, t.height].some((v) => typeof v !== "number" || !isFinite(v as number))) continue;
+    let cx = num(t.x) + num(t.width) / 2;
+    let cy = num(t.y) + num(t.height) / 2;
+    if (!inside(cx, cy)) continue;
+    const pts = (arrow.points as [number, number][] | undefined) ?? [];
+    // Direction only needs the delta — points are arrow-relative, and the
+    // delta is translation-invariant.
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    let dx = last && first ? num(last[0]) - num(first[0]) : 0;
+    let dy = last && first ? num(last[1]) - num(first[1]) : 0;
+    const len = Math.hypot(dx, dy);
+    if (!isFinite(len) || len < 1) {
+      dx = 1;
+      dy = 0;
+    } else {
+      dx /= len;
+      dy /= len;
+    }
+    // March both directions, keep the shorter exit.
+    const march = (sx: number, sy: number): number => {
+      let d = 0;
+      while (d < 500 && inside(cx + sx * d, cy + sy * d)) d += 4;
+      return d;
+    };
+    const fwd = march(dx, dy);
+    const back = march(-dx, -dy);
+    const [ux, uy] = fwd <= back ? [dx, dy] : [-dx, -dy];
+    const dist = Math.min(fwd, back) + 6;
+    t.x = num(t.x) + ux * dist;
+    t.y = num(t.y) + uy * dist;
   }
   return elements;
 }
