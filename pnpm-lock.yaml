@@ -8,18 +8,12 @@ importers:
 
   .:
     dependencies:
-      '@excalidraw/excalidraw':
-        specifier: 0.18.0
-        version: 0.18.0(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@excalidraw/mermaid-to-excalidraw':
         specifier: 2.2.2
         version: 2.2.2
       '@hono/node-server':
         specifier: ^2.1.1
         version: 2.1.1(hono@4.13.5)
-      esbuild:
-        specifier: ^0.28.2
-        version: 0.28.2
       hono:
         specifier: ^4.13.5
         version: 4.13.5
@@ -29,13 +23,10 @@ importers:
       mermaid:
         specifier: 11.17.2
         version: 11.17.2
-      react:
-        specifier: 18.3.1
-        version: 18.3.1
-      react-dom:
-        specifier: 18.3.1
-        version: 18.3.1(react@18.3.1)
     devDependencies:
+      '@excalidraw/excalidraw':
+        specifier: 0.18.0
+        version: 0.18.0(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@types/jsdom':
         specifier: ^30.0.0
         version: 30.0.0
@@ -48,6 +39,15 @@ importers:
       '@types/react-dom':
         specifier: ^18.3.7
         version: 18.3.7(@types/react@18.3.31)
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: 18.3.1
+        version: 18.3.1(react@18.3.1)
       tsx:
         specifier: ^4.19.0
         version: 4.23.13
