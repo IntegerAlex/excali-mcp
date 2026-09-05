@@ -3,8 +3,8 @@ import mermaid from "mermaid";
 import { parseMermaidToExcalidraw } from "@excalidraw/mermaid-to-excalidraw";
 import { complete, type ChatMsg, type LlmOpts } from "./llm.js";
 import { loadIconTemplates } from "./library.js";
-import { declutter, dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, withBoundLabels } from "./geometry.js";
-export { declutter, dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, straightenArrows, withBoundLabels } from "./geometry.js";
+import { declutter, dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, spreadArrowEnds, withBoundLabels } from "./geometry.js";
+export { declutter, dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, spreadArrowEnds, straightenArrows, withBoundLabels } from "./geometry.js";
 import { existsSync } from "node:fs";
 
 export interface Scene {
@@ -141,6 +141,7 @@ export async function convertToScene(mermaidSource: string): Promise<Scene> {
   if (isFlow) out = await applyIcons(out, mermaidSource);
   out = declutter(out);
   out = slideEdgeLabelsOutOfNodes(out);
+  spreadArrowEnds(out);
   // NOTE: detachArrowLabels is NOT called here. When decorations are
   // applied, labels must stay bound during declutter so they move with
   // arrows. The MCP handler (or applyDecorations) calls detach last.
@@ -200,6 +201,39 @@ export function lintEdgeLabels(source: string): LongLabel[] {
     if (chars > 50 || words > 7) bad.push({ label, chars, words });
   }
   return bad;
+}
+
+export interface FanIn {
+  node: string;
+  degree: number;
+}
+
+/** Total-degree hot spots over unique node pairs (the topology dedupeArrows
+ *  leaves behind). Non-blocking warning — hubs are sometimes legitimate —
+ *  but past this point layout reliably degrades, so the agent should split
+ *  via intermediate/hub nodes toward ≤3 edges per node. */
+export function lintFanIn(source: string, cap = 5): FanIn[] {
+  const flat = source
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("%%"))
+    .join("\n");
+  const pairs = new Set<string>();
+  for (const m of flat.matchAll(/([\w$]+)\s*(?:-{1,2}|-\.-|=+)>+(?:\|[\s\S]*?\|)?\s*([\w$]+)/g)) {
+    const a = m[1]!;
+    const b = m[2]!;
+    if (a === b) continue;
+    pairs.add(a < b ? `${a} ${b}` : `${b} ${a}`);
+  }
+  const degree = new Map<string, number>();
+  for (const p of pairs) {
+    const [a, b] = p.split(" ") as [string, string];
+    degree.set(a, (degree.get(a) ?? 0) + 1);
+    degree.set(b, (degree.get(b) ?? 0) + 1);
+  }
+  return [...degree.entries()]
+    .filter(([, n]) => n > cap)
+    .map(([node, n]) => ({ node, degree: n }))
+    .sort((x, y) => y.degree - x.degree);
 }
 
 let iconCache: Promise<Map<string, Record<string, unknown>[]>> | null = null;

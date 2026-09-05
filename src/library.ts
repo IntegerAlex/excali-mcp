@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { declutter, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes } from "./geometry.js";
+import { declutter, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, spreadArrowEnds } from "./geometry.js";
 
 export interface LibraryItem {
   id: string;
@@ -374,6 +374,17 @@ export function replaceNodeWithIcon(
   const node = elements[idx]!;
   const captions = elements.filter((e) => e.type === "text" && e.containerId === nodeId);
   const capW = Math.max(0, ...captions.map((c) => numf(c.width, 40)), 40) + 34;
+  // Reserve a caption strip BELOW the art: stacking captions inside the art
+  // rect renders as "empty box + label spilling out". Art scales into the
+  // box minus this strip; captions land fully below the artwork. Height is
+  // measured from line count — stored heights historically assume one line.
+  const capLines = (t: Record<string, unknown>): number =>
+    typeof t.text === "string" ? t.text.split("\n").length : 1;
+  const capH = captions.reduce(
+    (a, c) => a + Math.max(numf(c.height, 0), capLines(c) * numf(c.fontSize, 16) * 1.3) + 4,
+    0,
+  );
+  const stripH = capH > 0 ? capH + 14 : 0;
   const oldBox = {
     x: numf(node.x),
     y: numf(node.y),
@@ -381,10 +392,10 @@ export function replaceNodeWithIcon(
     h: Math.max(1, numf(node.height, 40)),
   };
   const newW = Math.max(oldBox.w, 132, capW);
-  const newH = Math.max(oldBox.h, 108);
+  const newH = Math.max(oldBox.h, 140) + stripH;
   const box = { x: oldBox.x - (newW - oldBox.w) / 2, y: oldBox.y - (newH - oldBox.h) / 2, w: newW, h: newH };
   const groupId = `icon-${nodeId}`;
-  const art = instantiateIcon(template, box, groupId);
+  const art = instantiateIcon(template, box, groupId, stripH);
   if (art.length === 0) return false;
   // Commit: remove box, place art, stack captions in the bottom strip.
   elements.splice(idx, 1);
@@ -425,11 +436,20 @@ export async function applyDecorations(
     const { groups, names } = await loadLibraryBySlug(d.library, d.libraryUrl);
     const template = groups[d.itemIndex];
     if (!template) throw new Error(`Item ${d.itemIndex} out of range for "${d.library}" (0–${groups.length - 1}). Use list_library_items to repick.`);
+    const itemName = names[d.itemIndex] ?? "";
+    // Glyph check: background-only templates (rectangles, no drawn glyph)
+    // render as empty squares — fail loud so the agent repicks instead of
+    // shipping a blank box (node target or tiled alike).
+    const artKinds = template.filter((e) => e.type !== "text").map((e) => String(e.type));
+    if (artKinds.length > 0 && !artKinds.some((t) => t === "line" || t === "freedraw" || t === "image" || t === "ellipse" || t === "arrow")) {
+      throw new Error(
+        `Decoration "${itemName || d.library}#${d.itemIndex}" has no drawable glyph (background-only art). Pick another item via list_library_items.`,
+      );
+    }
     // Icon-as-node: the agent knows the mapping, so an explicit `node`
     // (id or label) wins. Otherwise auto-match by item name, else tile below.
     // A failed explicit target is an error (with valid names) — silent tiling
     // is what produced the disconnected-icon screenshots.
-    const itemName = names[d.itemIndex] ?? "";
     let nodeId: string | null = null;
     if (typeof d.node === "string" && d.node) {
       const direct = elements.find((e) => String(e.id) === d.node);
@@ -501,6 +521,7 @@ export async function applyDecorations(
   // Replacements change footprints: re-run layout + label passes.
   declutter(elements);
   slideEdgeLabelsOutOfNodes(elements);
+  spreadArrowEnds(elements);
   // Detach last — labels must stay bound during declutter/slide so they
   // move with their arrows. Excalidraw re-snaps bound text to midpoint
   // at render time, undoing any manual positioning.
@@ -517,6 +538,7 @@ export function instantiateIcon(
   template: Record<string, unknown>[],
   box: { x: number; y: number; w: number; h: number },
   groupId: string,
+  bottomStrip = 0,
 ): Record<string, unknown>[] {
   const art = template.filter((e) => e.type !== "text");
   const xs: number[] = [];
@@ -535,12 +557,20 @@ export function instantiateIcon(
   const minY = Math.min(...ys);
   const natW = Math.max(1, Math.max(...xs) - minX);
   const natH = Math.max(1, Math.max(...ys) - minY);
-  const targetH = Math.max(24, box.h - 46);
+  // Captions live in the reserved strip below, so the art area needs only a
+  // small top/bottom pad — not the legacy 46px overlap allowance.
+  const targetH = Math.max(64, box.h - Math.max(0, bottomStrip) - 24);
   const targetW = Math.max(24, box.w - 24);
   const s = Math.min(targetW / natW, targetH / natH);
   const offX = box.x + box.w / 2 - (natW * s) / 2 - minX * s;
   const offY = box.y + 10 - minY * s;
   const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : 0);
+  // Points are relative to element x/y: scale them too, or art renders at
+  // template-native size inside a scaled box (tiny glyph in a big card).
+  const scalePts = (p: unknown): [number, number][] | undefined =>
+    Array.isArray(p)
+      ? (p as [number, number][]).map(([px, py]) => [num(px) * s, num(py) * s] as [number, number])
+      : undefined;
   return art.map((e) => ({
     ...e,
     id: freshId(),
@@ -549,6 +579,10 @@ export function instantiateIcon(
     y: num(e.y) * s + offY,
     width: num(e.width) * s,
     height: num(e.height) * s,
+    ...(Array.isArray(e.points) ? { points: scalePts(e.points) } : {}),
+    ...(Array.isArray(e.lastCommittedPoint)
+      ? { lastCommittedPoint: scalePts([e.lastCommittedPoint])![0] }
+      : {}),
     seed: Math.floor(Math.random() * 2 ** 31),
     versionNonce: Math.floor(Math.random() * 2 ** 31),
   }));

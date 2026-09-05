@@ -202,7 +202,7 @@ export function declutter(elements: Record<string, unknown>[]): Record<string, u
     }
     return mx || 60;
   })();
-  const PAD = Math.max(50, maxDim * 0.4);
+  const PAD = Math.min(90, Math.max(50, maxDim * 0.4));
 
   const moveText = (containerId: string, dx: number, dy: number, moved: Set<string>): void => {
     for (const e of elements) {
@@ -572,6 +572,123 @@ export function straightenArrows(elements: Record<string, unknown>[]): void {
 }
 
 /**
+ * Fan arrow endpoints out along the node border. reanchor() maps every
+ * same-direction arrow onto one border point, so hubs (13 arrows into one
+ * node) render as a single choke point. Relax incident angles to a minimum
+ * separation, clamped near each endpoint's natural side. Positions only —
+ * labels untouched (moves are small).
+ */
+export function spreadArrowEnds(elements: Record<string, unknown>[]): void {
+  const num = (v: unknown): number => (typeof v === "number" && isFinite(v) ? v : 0);
+  const boxes = new Map<string, { x: number; y: number; w: number; h: number }>();
+  for (const e of elements) {
+    if (
+      (e.type === "rectangle" || e.type === "diamond" || e.type === "ellipse") &&
+      [e.x, e.y, e.width, e.height].every((v) => typeof v === "number" && isFinite(v))
+    ) {
+      boxes.set(String(e.id), { x: num(e.x), y: num(e.y), w: Math.max(1, num(e.width)), h: Math.max(1, num(e.height)) });
+    }
+  }
+  // Icon replacements deleted their rect: arrows still reference the node id.
+  {
+    const seen = new Set<string>();
+    for (const e of elements) {
+      const g = (e.groupIds as string[] | undefined) ?? [];
+      const icon = g.find((x) => typeof x === "string" && x.startsWith("icon-"));
+      if (!icon || seen.has(icon)) continue;
+      seen.add(icon);
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (const m of elements) {
+        if (!((m.groupIds as string[] | undefined) ?? []).includes(icon)) continue;
+        if ([m.x, m.y, m.width, m.height].every((v) => typeof v === "number" && isFinite(v))) {
+          xs.push(num(m.x), num(m.x) + num(m.width));
+          ys.push(num(m.y), num(m.y) + num(m.height));
+        }
+      }
+      if (xs.length > 0) {
+        boxes.set(icon.replace(/^icon-/, ""), {
+          x: Math.min(...xs),
+          y: Math.min(...ys),
+          w: Math.max(1, Math.max(...xs) - Math.min(...xs)),
+          h: Math.max(1, Math.max(...ys) - Math.min(...ys)),
+        });
+      }
+    }
+  }
+  interface End {
+    arrow: Record<string, unknown>;
+    which: 0 | -1;
+    theta: number;
+    orig: number;
+  }
+  const byNode = new Map<string, End[]>();
+  for (const e of elements) {
+    if (e.type !== "arrow") continue;
+    const pts = e.points as [number, number][] | undefined;
+    if (!pts || pts.length < 2) continue;
+    const ox = num(e.x);
+    const oy = num(e.y);
+    const push = (id: string | undefined, which: 0 | -1): void => {
+      if (!id) return;
+      const box = boxes.get(String(id));
+      if (!box) return;
+      const p = which === 0 ? pts[0]! : pts[pts.length - 1]!;
+      const px = num(p[0]);
+      const py = num(p[1]);
+      if (!isFinite(px) || !isFinite(py)) return;
+      const theta = Math.atan2(oy + py - (box.y + box.h / 2), ox + px - (box.x + box.w / 2));
+      if (!isFinite(theta)) return;
+      const list = byNode.get(String(id)) ?? [];
+      list.push({ arrow: e, which, theta, orig: theta });
+      byNode.set(String(id), list);
+    };
+    push((e.start as { id?: string } | undefined)?.id, 0);
+    push((e.end as { id?: string } | undefined)?.id, -1);
+  }
+  const MIN_SEP = 0.12;
+  const MAX_DRIFT = 0.6;
+  const borderPoint = (box: { x: number; y: number; w: number; h: number }, theta: number): [number, number] => {
+    const dx = Math.cos(theta);
+    const dy = Math.sin(theta);
+    const sx = dx !== 0 ? box.w / 2 / Math.abs(dx) : Infinity;
+    const sy = dy !== 0 ? box.h / 2 / Math.abs(dy) : Infinity;
+    const t = Math.min(sx, sy) + 2;
+    return [box.x + box.w / 2 + dx * t, box.y + box.h / 2 + dy * t];
+  };
+  for (const [id, list] of byNode) {
+    if (list.length < 2) continue;
+    const box = boxes.get(id)!;
+    for (let iter = 0; iter < 20; iter++) {
+      list.sort((a, b) => a.theta - b.theta);
+      let moved = false;
+      for (let i = 0; i < list.length; i++) {
+        const a = list[i]!;
+        const b = list[(i + 1) % list.length]!;
+        let gap = b.theta - a.theta;
+        if (i === list.length - 1) gap += Math.PI * 2;
+        if (gap < MIN_SEP) {
+          const push = (MIN_SEP - gap) / 2;
+          a.theta = Math.max(a.orig - MAX_DRIFT, a.theta - push);
+          b.theta = Math.min(b.orig + MAX_DRIFT, b.theta + push);
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    for (const en of list) {
+      const [bx, by] = borderPoint(box, en.theta);
+      if (!isFinite(bx) || !isFinite(by)) continue;
+      const pts = en.arrow.points as [number, number][];
+      const ox = num(en.arrow.x);
+      const oy = num(en.arrow.y);
+      if (en.which === 0 && pts[0]) pts[0] = [bx - ox, by - oy];
+      else if (en.which !== 0 && pts.length > 1) pts[pts.length - 1] = [bx - ox, by - oy];
+    }
+  }
+}
+
+/**
  * Detach arrow-bound labels: Excalidraw re-snaps bound arrow text to the
  * arrow midpoint at render time, undoing the separation above. Must be
  * called LAST — after all declutter/slide passes — so labels move with
@@ -611,25 +728,31 @@ export function withBoundLabels(elements: Record<string, unknown>[]): Record<str
     // The SDK intentionally leaves label-driven boxes (e.g. alt-frame tags)
     // unsized ("width calculated based on label"): fill from text metrics so
     // no element ships with non-finite geometry. Real geometry is never touched.
+    // Measure per-LINE: label.text routinely spans lines ("A\nB") and the old
+    // whole-string metrics made multiline captions single-line height (26px
+    // for 2 lines at fs=20) — every spacing pass downstream inherited it.
+    const labelLines = label.text.split("\n");
+    const longestLine = Math.max(1, ...labelLines.map((l) => l.length));
     if (typeof el.width !== "number" || !Number.isFinite(el.width)) {
-      el.width = Math.max(20, label.text.length * fontSize * 0.6) + 20;
+      el.width = Math.max(20, longestLine * fontSize * 0.6) + 20;
     }
     if (typeof el.height !== "number" || !Number.isFinite(el.height)) {
-      el.height = fontSize * 1.3 + 12;
+      el.height = labelLines.length * fontSize * 1.3 + 12;
     }
     const w = el.width as number;
     const h = el.height as number;
     const x = typeof el.x === "number" ? el.x : 0;
     const y = typeof el.y === "number" ? el.y : 0;
-    const textW = Math.max(20, label.text.length * fontSize * 0.6);
+    const textW = Math.max(20, longestLine * fontSize * 0.6);
+    const textH = labelLines.length * fontSize * 1.3;
     const textId = `${String(el.id)}-label`;
     out.push({
       id: textId,
       type: "text",
       x: x + w / 2 - textW / 2,
-      y: y + h / 2 - fontSize * 0.65,
+      y: y + h / 2 - textH / 2,
       width: textW,
-      height: fontSize * 1.3,
+      height: textH,
       angle: 0,
       strokeColor: (el.strokeColor as string) ?? "#1e1e1e",
       backgroundColor: "transparent",
