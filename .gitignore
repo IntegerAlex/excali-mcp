@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*.excalidraw.json
+scene.mmd
+*.context.json
+*.mmd
