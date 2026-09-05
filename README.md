@@ -4,6 +4,18 @@ No API key needed. Your coding agent is the LLM — `diagram-tool` only validate
 
 ## Recommended: MCP server (any coding agent)
 
+**OpenCode** (`opencode.json`) — note the format differs from other agents:
+
+```json
+{ "mcp": { "diagram-tool": {
+  "type": "local",
+  "command": ["npx", "-y", "diagram-tool", "mcp"],
+  "enabled": true
+} } }
+```
+
+**Claude Code / Cursor / Windsurf / VSCode** (generic shape):
+
 ```json
 { "mcpServers": { "diagram-tool": { "command": "npx", "args": ["-y", "diagram-tool", "mcp"] } } }
 ```
@@ -29,7 +41,7 @@ Everything revolves around `diagram-tool.context.json`:
 ```
 
 - MCP/CLI writes it on every render (bumps `rev`, writes `.excalidraw.json` + `.mmd` sidecars).
-- UI autosaves canvas edits back to it (`POST /api/scene`, debounced; stale `rev` → 409 + fresh copy).
+- UI autosaves canvas edits back to it (`POST /api/scene`, debounced; on a rev conflict your edits are merged onto the fresh rev and retried, not discarded).
 - UI subscribes to SSE `GET /api/live` (Hono server watches the file) and refetches on rev bumps, so agent edits appear in the open canvas without reload.
 
 ## Shell fallback (no MCP)
@@ -49,7 +61,9 @@ Agent loop without MCP: edit `mermaidSource` in the context file, run `diagram-t
 - `diagram-tool library add <name>` — download from libraries.excalidraw.com (e.g. `diagram-tool library add aws`)
 - Node icon classes also work: `class USER actor,icon_user` (slugs: `icon_user`, `icon_users`, `icon_home`, `icon_lock`, `icon_search`, `icon_chart`, `icon_email`, `icon_calendar`, `icon_location`, `icon_payment`)
 
-Rule of thumb: cloud/architecture/network diagrams get ≤6 icons; logic flowcharts and sequence/ER/class diagrams stay pure mermaid.
+Rule of thumb: cloud/architecture/network diagrams get ≤6 icons; logic flowcharts and sequence/ER/class diagrams stay pure mermaid. Agents follow this automatically — a mandatory library rule in the MCP instructions forces icon lookup (e.g. the 24 named AWS Serverless v2 icons) whenever cloud services are mentioned.
+
+The viewer ships Excalidraw's real canvas fonts (Virgil, Cascadia, …) with the bundle, so labels render exactly as measured — no fallback-font overflow. (Only the 13MB CJK set is excluded; CJK falls back to system fonts.)
 
 ## BYOK fallback (optional, needs a key)
 
@@ -61,4 +75,4 @@ diagram-tool edit "add a retry step" --provider openrouter
 
 Flags: `--provider openai|anthropic|google|ollama|openrouter`, `--model`, `--api-key`, `--base-url`, `--port`, `--no-serve`, `--context`.
 
-Pipeline: few-shot prompt → strict Mermaid parse → up to 2 self-repairs (parser error fed back) → `mermaid-to-excalidraw`. Server-side geometry is approximated from text length (jsdom `getBBox` shim); browser is truth.
+Pipeline: strict Mermaid parse → `mermaid-to-excalidraw` (browser-faithful SVG geometry via attribute-aware measurement) → flowchart-only dedupe → overlap declutter → edge-label slide. The viewer ships Excalidraw's real canvas fonts, so what the agent lays out is what you see.
