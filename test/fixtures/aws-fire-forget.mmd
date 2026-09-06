@@ -1,0 +1,32 @@
+%%{init: {"flowchart": {"nodeSpacing": 60, "rankSpacing": 90, "curve": "linear"}}}%%
+flowchart LR
+    CLIENT["Client Application"]
+    APIGW["API Gateway"]
+    LAMBDA1["Lambda: Request Handler"]
+    SQS["SQS Queue"]
+    LAMBDA2["Lambda: Worker Processor"]
+    DYNAMO["DynamoDB"]
+    S3["S3 Bucket"]
+    SNS["SNS Topic"]
+    LAMBDA3["Lambda: Notification"]
+    CLIENT2["Client: Status Polling"]
+
+    CLIENT-->|"POST /process"|APIGW
+    APIGW-->|"Trigger"|LAMBDA1
+    LAMBDA1-->|"Enqueue message"|SQS
+    LAMBDA1-->|"Return 202 Accepted"|CLIENT
+    SQS-->|"Event source"|LAMBDA2
+    LAMBDA2-->|"Write result"|DYNAMO
+    LAMBDA2-->|"Store artifact"|S3
+    LAMBDA2-->|"Publish event"|SNS
+    SNS-->|"Trigger"|LAMBDA3
+    LAMBDA3-->|"Send notification"|CLIENT2
+
+    classDef client fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef aws fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    classDef flow fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef ext fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
+    class CLIENT client
+    class CLIENT2 client
+    class APIGW,SQS,DYNAMO,S3,SNS aws
+    class LAMBDA1,LAMBDA2,LAMBDA3 flow
