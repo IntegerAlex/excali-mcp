@@ -3,8 +3,8 @@ import mermaid from "mermaid";
 import { parseMermaidToExcalidraw } from "@excalidraw/mermaid-to-excalidraw";
 import { complete, type ChatMsg, type LlmOpts } from "./llm.js";
 import { loadIconTemplates } from "./library.js";
-import { dedupeArrows, withBoundLabels } from "./geometry.js";
-export { dedupeArrows, detachArrowLabels, reanchor, withBoundLabels } from "./geometry.js";
+import { dedupeArrows, slideEdgeLabelsOutOfNodes, withBoundLabels } from "./geometry.js";
+export { dedupeArrows, detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes, withBoundLabels } from "./geometry.js";
 import { existsSync } from "node:fs";
 
 export interface Scene {
@@ -142,6 +142,10 @@ export async function convertToScene(mermaidSource: string): Promise<Scene> {
   let out = withBoundLabels(els);
   if (isFlow) out = dedupeArrows(out);
   if (isFlow) out = await applyIcons(out, mermaidSource);
+  // Edge-label slide (verified: raw dagre centers 6/10 labels inside node
+  // boxes on the AWS fixture; 0/10 after). declutter stays deleted — wider
+  // dagre spacing solved box collisions and the overlap lint covers residuals.
+  out = slideEdgeLabelsOutOfNodes(out);
   return {
     type: "excalidraw",
     version: 2,

@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { detachArrowLabels, reanchor } from "./geometry.js";
+import { detachArrowLabels, reanchor, slideEdgeLabelsOutOfNodes } from "./geometry.js";
 
 export interface LibraryItem {
   id: string;
@@ -548,6 +548,16 @@ export function replaceNodeWithIcon(
     elements.push(c);
   }
   reanchor(elements, nodeId, box);
+  // The box is gone: drop arrow bindings that point at it. Geometry was
+  // already re-anchored onto the final border above, so arrows keep their
+  // shape; leaving the refs would dangle at a nonexistent id.
+  for (const e of elements) {
+    if (e.type !== "arrow") continue;
+    for (const k of ["start", "end"] as const) {
+      const b = e[k] as { id?: string } | undefined;
+      if (b && b.id === nodeId) delete e[k];
+    }
+  }
   return { replaced: true, grew };
 }
 
@@ -656,10 +666,9 @@ export async function applyDecorations(
     if (d.x === undefined) cursorX += w + 40;
     placed.push({ library: d.library, itemIndex: d.itemIndex, elementIds: ids });
   }
-  // No layout passes after replacement: boxes keep dagre rects (fit) or
-  // provably-clear grown rects, so there is nothing to repair. Detach last —
-  // labels stay bound through reanchor shifts; Excalidraw would re-snap
-  // bound text to arrow midpoints at render time.
+  // Slide-then-detach: replacements change footprints, so labels are
+  // re-cleared here (containerIds still intact); detach preserves positions.
+  slideEdgeLabelsOutOfNodes(elements);
   detachArrowLabels(elements);
   return { added, placed };
 }
