@@ -214,3 +214,182 @@ export function withBoundLabels(elements: Record<string, unknown>[]): Record<str
   }
   return out;
 }
+export function slideEdgeLabelsOutOfNodes(elements: Record<string, unknown>[]): Record<string, unknown>[] {
+  const num = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
+  const boxes = elements.filter(
+    (e) =>
+      (e.type === "rectangle" || e.type === "diamond" || e.type === "ellipse") &&
+      [e.x, e.y, e.width, e.height].every((v) => typeof v === "number" && isFinite(v)),
+  );
+  if (boxes.length === 0) return elements;
+  // Icon groups have no container rect (deleted on replacement) — their bbox
+  // is an obstacle too, or labels land on top of icon art.
+  {
+    const seen = new Set<string>();
+    for (const e of elements) {
+      const g = (e.groupIds as string[] | undefined) ?? [];
+      const icon = g.find((x) => typeof x === "string" && x.startsWith("icon-"));
+      if (!icon || seen.has(icon)) continue;
+      seen.add(icon);
+      const members = elements.filter((m) => ((m.groupIds as string[] | undefined) ?? []).includes(icon));
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (const m of members) {
+        if ([m.x, m.y, m.width, m.height].every((v) => typeof v === "number" && isFinite(v))) {
+          xs.push(num(m.x), num(m.x) + num(m.width));
+          ys.push(num(m.y), num(m.y) + num(m.height));
+        }
+      }
+      if (xs.length > 0) {
+        boxes.push({
+          type: "__iconbox",
+          x: Math.min(...xs),
+          y: Math.min(...ys),
+          width: Math.max(...xs) - Math.min(...xs),
+          height: Math.max(...ys) - Math.min(...ys),
+        });
+      }
+    }
+  }
+  // Dynamic margin: icons (80-150px) need more clearance than text boxes.
+  const avgBoxDim = (() => {
+    let s = 0, n = 0;
+    for (const b of boxes) { s += num(b.width) + num(b.height); n += 2; }
+    return n > 0 ? s / n : 40;
+  })();
+  const MARGIN = Math.max(16, avgBoxDim * 0.25);
+  const inside = (x: number, y: number): boolean =>
+    boxes.some((b) => {
+      const bx = num(b.x);
+      const by = num(b.y);
+      const bw = num(b.width);
+      const bh = num(b.height);
+      return x >= bx - MARGIN && x <= bx + bw + MARGIN && y >= by - MARGIN && y <= by + bh + MARGIN;
+    });
+  const marchOut = (t: Record<string, unknown>): void => {
+    let cx = num(t.x) + num(t.width) / 2;
+    let cy = num(t.y) + num(t.height) / 2;
+    if (!inside(cx, cy)) return;
+    const arrow = elements.find((e) => e.type === "arrow" && e.id === (t as { containerId?: string }).containerId);
+    // Detached labels lost containerId — fall back to vertical exit.
+    const pts = (arrow?.points as [number, number][] | undefined) ?? [];
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    let dx = last && first ? num(last[0]) - num(first[0]) : 0;
+    let dy = last && first ? num(last[1]) - num(first[1]) : 0;
+    const len = Math.hypot(dx, dy);
+    if (!isFinite(len) || len < 1) {
+      dx = 0;
+      dy = 1;
+    } else {
+      dx /= len;
+      dy /= len;
+    }
+    const march = (sx: number, sy: number): number => {
+      let d = 0;
+      while (d < 800 && inside(cx + sx * d, cy + sy * d)) d += 6;
+      return d;
+    };
+    const fwd = march(dx, dy);
+    const back = march(-dx, -dy);
+    const [ux, uy] = fwd <= back ? [dx, dy] : [-dx, -dy];
+    const dist = Math.min(fwd, back) + 6;
+    t.x = num(t.x) + ux * dist;
+    t.y = num(t.y) + uy * dist;
+  };
+  for (const t of elements) {
+    if (t.type !== "text" || typeof t.containerId !== "string") continue;
+    if ([t.x, t.y, t.width, t.height].some((v) => typeof v !== "number" || !isFinite(v as number))) continue;
+    // Arrow-bound edge labels only: node captions (containerId = box id)
+    // are centered in their boxes by construction — "inside" is correct.
+    if (!elements.some((e) => e.type === "arrow" && e.id === t.containerId)) continue;
+    marchOut(t);
+  }
+  // Pairwise label-label separation. Push apart along the center-connecting
+  // line (least-overlap axis fails for same-line pairs: it slides them along
+  // the shared edge instead of apart). Node captions are anchored — when a
+  // caption collides with a free label, only the label moves.
+  const isCaption = (e: Record<string, unknown>): boolean => {
+    if (e.type !== "text") return false;
+    const cid = e.containerId;
+    if (typeof cid === "string") {
+      const c = elements.find((x) => x.id === cid);
+      if (c && (c.type === "rectangle" || c.type === "diamond" || c.type === "ellipse")) return true;
+    }
+    const g = e.groupIds as string[] | undefined;
+    return Array.isArray(g) && g.some((x) => typeof x === "string" && x.startsWith("icon-"));
+  };
+  const labels = elements.filter(
+    (e) =>
+      e.type === "text" &&
+      [e.x, e.y, e.width, e.height].every((v) => typeof v === "number" && isFinite(v)),
+  );
+  const center = (e: Record<string, unknown>): [number, number] => [
+    num(e.x) + num(e.width) / 2,
+    num(e.y) + num(e.height) / 2,
+  ];
+  const separatePairs = (): void => {
+    for (let iter = 0; iter < 10; iter++) {
+      let moved = false;
+      for (let i = 0; i < labels.length; i++) {
+        for (let j = i + 1; j < labels.length; j++) {
+          const A = labels[i]!;
+          const B = labels[j]!;
+        const [ax, ay] = center(A);
+        const [bx, by] = center(B);
+        const ox = (num(A.width) + num(B.width)) / 2 - Math.abs(ax - bx) + 14;
+        const oy = (num(A.height) + num(B.height)) / 2 - Math.abs(ay - by) + 14;
+        if (ox <= 0 || oy <= 0) continue;
+        const capA = isCaption(A);
+        const capB = isCaption(B);
+        if (capA && capB) continue; // two anchored captions: leave to node pass
+        // Direction: center-connecting line. Anchored captions don't move.
+        let dx = ax - bx;
+        let dy = ay - by;
+        const len = Math.hypot(dx, dy);
+        if (!isFinite(len) || len < 1) {
+          dx = 1;
+          dy = 0;
+        } else {
+          dx /= len;
+          dy /= len;
+        }
+        const step = (Math.min(ox, oy) + 14) / 2;
+        moved = true;
+        if (!capA) {
+          A.x = num(A.x) + dx * step;
+          A.y = num(A.y) + dy * step;
+        }
+        if (!capB) {
+          B.x = num(B.x) - dx * step;
+          B.y = num(B.y) - dy * step;
+        }
+        if (capA !== capB) {
+          // Anchored side stays: give the free side the full distance.
+          const F = capA ? B : A;
+          const s = capA ? -1 : 1;
+          F.x = num(F.x) + dx * s * step;
+          F.y = num(F.y) + dy * s * step;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+  };
+  separatePairs();
+  // Pairwise splits can push labels back inside boxes — march out again.
+  // This pass covers detached labels too (vertical fallback, no arrow needed).
+  // Pairwise runs once more after, so the final word on label-label
+  // collisions is separation, not box-escape.
+  for (const t of elements) {
+    if (t.type !== "text") continue;
+    if ([t.x, t.y, t.width, t.height].some((v) => typeof v !== "number" || !isFinite(v as number))) continue;
+    // Anchored captions live inside their boxes by design — only free and
+    // detached edge labels march here.
+    if (isCaption(t)) continue;
+    marchOut(t);
+  }
+  separatePairs();
+  return elements;
+}
+
