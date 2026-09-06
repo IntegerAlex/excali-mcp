@@ -12,6 +12,10 @@ top-10 action list; this file distills the cross-cutting conclusions.
 | `converter-internals.md` | `parseMermaidToExcalidraw` source (2.2.2), file:function:line citations | Output is **skeletons** (`label:{text,fontSize}` is standard, consumed by step 2 which we skip); subgraph throw → whole-diagram `image` fallback; 6-case shape switch; classDef 5-prop whitelist |
 | `layout-algorithms.md` | Dagre/ELK/overlap-removal/labels/text-metrics | Virgil ≈0.55–0.60em advance; VPSC over push-apart; ELK option set; fontkit-first recommendation |
 | `error-audit.md` | ~25 failure modes in our `src/` with severity + fix sketch | Non-atomic writes, 409 edit loss, NaN arrows, declutter-vs-icons, hyphen ids, viewport clobber |
+| `skeleton-api.md` | Adopt-or-defer decision on official two-step (verified by Node experiment) | **DEFER**: needs canvas in Node (native dep) or viewer-side conversion (breaks sidecars); revisit conditions listed |
+| `media.md` | Videos, talks, podcasts (URLs verified 2026-09-06) | Chedeau: LLM→Mermaid→converter is the winning pattern; Sugiyama/ELK visual explainers; reference MCP demo |
+| `papers.md` | Journals: layout, labels, measurement (OA links verified) | Sugiyama/Gansner/Brandes-Köpf/ELK/edge-labels/VPSC/Purchase; applied-so-far map |
+| `blogs.md` | Blogs, official docs, specs | Vendored: skeleton API, json-schema, converter API; stdio-never-stdout; workflow-tools-over-micro-tools |
 
 ## Cross-cutting conclusions (highest value first)
 
