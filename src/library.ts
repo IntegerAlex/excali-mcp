@@ -343,6 +343,9 @@ export function matchNodeByName(elements: Record<string, unknown>[], name: strin
   if (want.length < 2) return null;
   for (const e of containers) {
     const label = normalizeName(nodeLabel(elements, String(e.id)));
+    // Empty labels match everything via "".includes — skip (icon art parts
+    // carry no labels; without this the first art rect wins every query).
+    if (!label) continue;
     if (label.includes(want) || want.includes(label)) return String(e.id);
   }
   return null;
