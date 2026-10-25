@@ -1,6 +1,6 @@
 # Diagram Tool — agent-drawn Excalidraw on localhost, synced via a context file
 
-[![smithery badge](https://smithery.ai/badge/integeralex/excali-mcp)](https://smithery.ai/servers/integeralex/excali-mcp)
+[![LightNow capabilities](https://lightnow.ai/badge/io.github.IntegerAlex/excali-mcp)](https://lightnow.ai/servers/io.github.IntegerAlex/excali-mcp)
 
 No API key needed. Your coding agent is the LLM — `diagram-tool` only validates Mermaid, renders the scene, and serves the live UI.
 
